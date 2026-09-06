@@ -253,10 +253,10 @@ def _selfcheck():
             return super().upload(parent, name, src, mime)
 
     for trip in ("download", "output", "marker"):
-        d = _FlakyDrive(trip)
-        d.upload("root/p/in", "x.stl", b"x")   # tripped=False only matters for "marker": reset below
+        d = _FlakyDrive(None)
+        d.upload("root/p/in", "x.stl", b"x")
         d.upload("root/p/in", "y.stl", b"y")
-        d.tripped = False
+        d.trip = trip
         run(d, "root", time.time() + 60, {"p": upper})
         out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
         assert out == {"y.stl"}, (trip, out)          # x faulted: no marker left; y still processed
