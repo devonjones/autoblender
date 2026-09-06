@@ -1,0 +1,8 @@
+.git
+.gitignore
+bin/
+**/__pycache__
+**/*.pyc
+*.stl
+*.blend
+*.blend1

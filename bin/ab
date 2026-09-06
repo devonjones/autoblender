@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="${AUTOBLENDER_IMAGE:-autoblender:latest}"
+
+exec docker run --rm -i \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -e AB_HOST_PWD="$PWD" \
+    -v "$PWD:/work" \
+    -v /home:/home \
+    -v /mnt:/mnt \
+    -w /work \
+    "$IMAGE" \
+    "$@"

@@ -1,0 +1,22 @@
+[project]
+name = "autoblender"
+version = "0.1.0"
+description = "Unix-style CLI for headless bpy operations"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "bpy==5.1.1",
+    "manifold3d>=3.0",
+    "trimesh>=4.5",
+    "networkx>=3",   # trimesh.repair.fix_winding
+    "scipy>=1.14",   # trimesh hole/adjacency helpers
+]
+
+[project.scripts]
+ab = "autoblender.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
