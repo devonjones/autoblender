@@ -93,6 +93,16 @@ def cmd_core(args):
         print(f"  UNREPAIRABLE shells (index, tris): {r['failed']}", file=sys.stderr)
 
 
+def cmd_cut(args):
+    from . import cut as _cut  # deferred: trimesh/manifold3d only, no bpy
+
+    reject_same_path(args.input, args.output)
+    with input_stl_path(args.input) as ip, output_stl_path(args.output) as op:
+        r = _cut.cut_stl(ip, op, args.z, args.keep)
+    if r["failed"]:
+        print(f"  UNREPAIRABLE shells (index, tris): {r['failed']}", file=sys.stderr)
+
+
 def cmd_shot(args):
     from . import shot as _shot  # deferred: heavy scene build, not needed elsewhere
 
@@ -386,6 +396,13 @@ def main():
     sp.add_argument("--min-solid-frac", type=float, default=0.0, metavar="F",
                     help="Lossy: drop disconnected bodies below this fraction of the largest")
     sp.set_defaults(fn=cmd_core)
+
+    sp = sub.add_parser("cut", help="Slice at a horizontal plane and keep one side (dropped to z=0)")
+    sp.add_argument("input", nargs="?", default="-")
+    sp.add_argument("output", nargs="?", default="-")
+    sp.add_argument("--z", type=float, required=True, help="Cut height in mm")
+    sp.add_argument("--keep", default="above", choices=["above", "below"])
+    sp.set_defaults(fn=cmd_cut)
 
     sp = sub.add_parser("shot", help="Studio product render of a tile STL")
     sp.add_argument("input")
