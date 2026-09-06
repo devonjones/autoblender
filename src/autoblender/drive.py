@@ -37,7 +37,10 @@ TOKEN = "https://oauth2.googleapis.com/token"
 MARKER = ("processing started {started}\n"
           "If this file is still here the run died (timeout or crash). Delete it to retry.\n"
           "If the output file is also here, the run succeeded and only this cleanup failed.\n")
-RESERVE = 300   # seconds kept back from the Lambda timeout; no new file starts inside it
+# ponytail: no new file starts inside the reserve, but a file can still outlive it.
+# cut_stl is ~2s for a 327k-tri single shell and ~490s for a 102k-shell mesh
+# (union repair is superlinear in shell count); raise this with slower processes.
+RESERVE = 300   # seconds kept back from the Lambda timeout
 
 
 class Drive:
@@ -156,7 +159,10 @@ def run(drive, root, deadline, processes=PROCESSES):
             if time.time() > deadline:
                 print(f"{name}: out of time, resuming next tick", file=sys.stderr)
                 return
-            process_one(drive, out_id, f, fn, label=f"{name}: ")
+            try:
+                process_one(drive, out_id, f, fn, label=f"{name}: ")
+            except Exception:   # Drive fault on the marker itself: skip the file this tick
+                print(f"{name}: {f['name']} drive fault, retrying next tick\n{traceback.format_exc()}", file=sys.stderr)
 
 
 def handler(event, context):
@@ -226,26 +232,37 @@ def _selfcheck():
     assert not any(p == "root/p/out" and n.startswith("late.stl") for (p, n, _) in d.files.values()), \
         "past deadline must not process"
 
-    # a Drive fault on the output upload leaves nothing behind, doesn't stop the tick,
-    # and the file is retried on the next one
+    # a Drive fault (on download, the output upload, or the marker upload) leaves nothing
+    # behind, doesn't stop the tick, and the file is retried on the next one
     class _FlakyDrive(_FakeDrive):
-        tripped = False
+        def __init__(self, trip):
+            super().__init__()
+            self.trip, self.tripped = trip, False
 
-        def upload(self, parent, name, src, mime=""):
-            if mime == "model/stl" and not self.tripped:
+        def _maybe_trip(self, op):
+            if op == self.trip and not self.tripped:
                 self.tripped = True
                 raise OSError("drive 503")
+
+        def download(self, file_id, path):
+            self._maybe_trip("download")
+            super().download(file_id, path)
+
+        def upload(self, parent, name, src, mime=""):
+            self._maybe_trip("output" if mime == "model/stl" else "marker")
             return super().upload(parent, name, src, mime)
 
-    d = _FlakyDrive()
-    d.upload("root/p/in", "x.stl", b"x")
-    d.upload("root/p/in", "y.stl", b"y")
-    run(d, "root", time.time() + 60, {"p": upper})
-    out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
-    assert out == {"y.stl"}, out            # x faulted: no marker left; y still processed
-    run(d, "root", time.time() + 60, {"p": upper})
-    out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
-    assert out == {"x.stl", "y.stl"}, out
+    for trip in ("download", "output", "marker"):
+        d = _FlakyDrive(trip)
+        d.upload("root/p/in", "x.stl", b"x")   # tripped=False only matters for "marker": reset below
+        d.upload("root/p/in", "y.stl", b"y")
+        d.tripped = False
+        run(d, "root", time.time() + 60, {"p": upper})
+        out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
+        assert out == {"y.stl"}, (trip, out)          # x faulted: no marker left; y still processed
+        run(d, "root", time.time() + 60, {"p": upper})
+        out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
+        assert out == {"x.stl", "y.stl"}, (trip, out)
 
     # the real upload(): bytes and path bodies both reach the PUT with a Content-Length
     calls = []
