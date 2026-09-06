@@ -36,8 +36,9 @@ data "aws_iam_policy_document" "lambda_assume" {
 }
 
 resource "aws_iam_role" "drive" {
-  name               = "${local.name}-drive"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  name                 = "${local.name}-drive"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
+  permissions_boundary = data.terraform_remote_state.infra.outputs.deploy_permissions_boundary_arn
 }
 
 resource "aws_iam_role_policy_attachment" "drive_logs" {
@@ -82,6 +83,15 @@ resource "aws_lambda_function" "drive" {
   }
 
   depends_on = [aws_cloudwatch_log_group.drive]
+}
+
+# EventBridge invokes asynchronously: without this, ticks throttled by the
+# concurrency limit queue for hours and replay back-to-back, and a crashing
+# handler is retried twice. A missed tick is just the next minute's tick.
+resource "aws_lambda_function_event_invoke_config" "drive" {
+  function_name                = aws_lambda_function.drive.function_name
+  maximum_event_age_in_seconds = 60
+  maximum_retry_attempts       = 0
 }
 
 # ─── Schedule ────────────────────────────────────────────────────────────────

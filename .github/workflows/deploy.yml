@@ -3,16 +3,11 @@ name: Deploy
 on:
   push:
     branches: [main]        # → staging
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options: [staging]
+  workflow_dispatch:      # → staging from any branch
 
+# ponytail: staging only; a production job needs its own state key, env and role
 concurrency:
-  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  group: deploy-staging
   cancel-in-progress: false
 
 permissions:
@@ -51,6 +46,7 @@ jobs:
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
         run: |
           docker build --target lambda \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
             --cache-from $IMAGE:latest \
             -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
           docker push $IMAGE:${{ github.sha }}

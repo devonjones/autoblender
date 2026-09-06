@@ -3,8 +3,11 @@
 Runs as a scheduled Lambda (handler) or locally (python -m autoblender.drive).
 Drive is the only state: an input is pending until a same-named file, or
 <name>.error.txt, exists in out/. Delete the out file to re-run an input.
+
+A placeholder <name>.error.txt is written before processing and removed on
+success, so a run the Lambda kills mid-file (timeout, OOM) leaves a visible
+error instead of head-of-line blocking every later tick.
 ponytail: full folder listing per tick; fine to a few thousand files per folder.
-ponytail: a single file that outlives the Lambda timeout is retried every tick.
 """
 
 import json
@@ -30,6 +33,9 @@ FOLDER = "application/vnd.google-apps.folder"
 API = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
 TOKEN = "https://oauth2.googleapis.com/token"
+MARKER = ("processing started {started}\n"
+          "If this file is still here the run died (timeout, crash, or upload failure). "
+          "Delete it to retry.\n")
 
 
 class Drive:
@@ -74,13 +80,25 @@ class Drive:
         with self._open(f"{API}/files/{file_id}?alt=media") as r, open(path, "wb") as f:
             shutil.copyfileobj(r, f)
 
-    def upload(self, parent, name, path, mime="application/octet-stream"):
+    def upload(self, parent, name, src, mime="application/octet-stream"):
+        """Upload bytes or the file at path `src`; streams the file. Returns the file id."""
         meta = json.dumps(dict(name=name, parents=[parent])).encode()
         with self._open(UPLOAD, meta, "POST", **{"Content-Type": "application/json",
                                                  "X-Upload-Content-Type": mime}) as r:
             session = r.headers["Location"]
-        with open(path, "rb") as f:
-            return self._json(session, f.read(), "PUT", **{"Content-Type": mime})
+        if isinstance(src, bytes):
+            body, size = src, len(src)
+        else:
+            body, size = open(src, "rb"), os.path.getsize(src)
+        try:
+            return self._json(session, body, "PUT", **{"Content-Type": mime, "Content-Length": str(size)})["id"]
+        finally:
+            if body is not src:
+                body.close()
+
+    def delete(self, file_id):
+        with self._open(f"{API}/files/{file_id}", method="DELETE"):
+            pass
 
 
 def pending(inputs, outputs):
@@ -91,28 +109,39 @@ def pending(inputs, outputs):
             and f["name"] + ".error.txt" not in done]
 
 
-def run(drive, root, deadline):
-    for name, fn in PROCESSES.items():
+def process_one(drive, out_id, f, fn):
+    """Run `fn` on one input. Returns True on success; a failure leaves <name>.error.txt."""
+    err_name = f["name"] + ".error.txt"
+    started = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())
+    marker = drive.upload(out_id, err_name, MARKER.format(started=started).encode(), "text/plain")
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = os.path.join(d, "in.stl"), os.path.join(d, "out.stl")
+        drive.download(f["id"], src)
+        t = time.time()
+        try:
+            fn(src, dst)
+        except Exception:
+            tb = traceback.format_exc()
+            drive.delete(marker)
+            drive.upload(out_id, err_name, tb.encode(), "text/plain")
+            print(f"{f['name']} FAILED\n{tb}", file=sys.stderr)
+            return False
+        drive.upload(out_id, f["name"], dst, "model/stl")
+    drive.delete(marker)
+    print(f"{f['name']} ok ({time.time() - t:.1f}s)", file=sys.stderr)
+    return True
+
+
+def run(drive, root, deadline, processes=PROCESSES):
+    for name, fn in processes.items():
         proc = drive.folder(root, name)
         in_id, out_id = drive.folder(proc, "in"), drive.folder(proc, "out")
         for f in pending(drive.list(in_id), drive.list(out_id)):
             if time.time() > deadline:
                 print(f"{name}: out of time, resuming next tick", file=sys.stderr)
                 return
-            with tempfile.TemporaryDirectory() as d:
-                src, dst = os.path.join(d, "in.stl"), os.path.join(d, "out.stl")
-                drive.download(f["id"], src)
-                t = time.time()
-                try:
-                    fn(src, dst)
-                    drive.upload(out_id, f["name"], dst, "model/stl")
-                    print(f"{name}: {f['name']} ok ({time.time() - t:.1f}s)", file=sys.stderr)
-                except Exception:
-                    err = os.path.join(d, "error.txt")
-                    with open(err, "w") as fh:
-                        fh.write(traceback.format_exc())
-                    drive.upload(out_id, f["name"] + ".error.txt", err, "text/plain")
-                    print(f"{name}: {f['name']} FAILED", file=sys.stderr)
+            print(f"{name}: ", end="", file=sys.stderr)
+            process_one(drive, out_id, f, fn)
 
 
 def handler(event, context):
@@ -124,16 +153,69 @@ def handler(event, context):
     run(Drive(**creds), os.environ["DRIVE_ROOT_FOLDER_ID"], deadline)
 
 
+class _FakeDrive:
+    """In-memory stand-in with the four methods run() uses."""
+
+    def __init__(self):
+        self.files = {}   # id -> (parent, name, bytes)
+        self.seq = 0
+
+    def list(self, parent):
+        return [dict(id=i, name=n, mimeType="application/octet-stream")
+                for i, (p, n, _) in self.files.items() if p == parent]
+
+    def folder(self, parent, name):
+        return f"{parent}/{name}"
+
+    def download(self, file_id, path):
+        with open(path, "wb") as fh:
+            fh.write(self.files[file_id][2])
+
+    def upload(self, parent, name, src, mime=""):
+        data = src if isinstance(src, bytes) else open(src, "rb").read()
+        self.seq += 1
+        fid = f"f{self.seq}"
+        self.files[fid] = (parent, name, data)
+        return fid
+
+    def delete(self, file_id):
+        del self.files[file_id]
+
+
 def _selfcheck():
     ins = [dict(name="a.stl"), dict(name="B.STL"), dict(name="c.stl"), dict(name="notes.txt"), dict(name="d.stl")]
     outs = [dict(name="a.stl"), dict(name="c.stl.error.txt")]
     assert [f["name"] for f in pending(ins, outs)] == ["B.STL", "d.stl"]
+
+    def upper(src, dst):
+        with open(src, "rb") as i, open(dst, "wb") as o:
+            data = i.read()
+            if data == b"bad":
+                raise ValueError("boom")
+            o.write(data.upper())
+
+    d = _FakeDrive()
+    d.upload("root/p/in", "good.stl", b"hello")
+    d.upload("root/p/in", "bad.stl", b"bad")
+    d.upload("root/p/in", "skip.txt", b"x")
+    run(d, "root", time.time() + 60, {"p": upper})
+    out = {n: data for (p, n, data) in d.files.values() if p == "root/p/out"}
+    assert out["good.stl"] == b"HELLO", out
+    assert b"ValueError: boom" in out["bad.stl.error.txt"], out
+    assert set(out) == {"good.stl", "bad.stl.error.txt"}, out      # markers cleaned up
+    n = len(d.files)
+    run(d, "root", time.time() + 60, {"p": upper})
+    assert len(d.files) == n, "second tick must be a no-op"
+    d.upload("root/p/in", "late.stl", b"late")
+    run(d, "root", time.time() - 1, {"p": upper})
+    assert not any(p == "root/p/out" and n.startswith("late.stl") for (p, n, _) in d.files.values()), \
+        "past deadline must not process"
     print("drive selfcheck ok")
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 3:   # python -m autoblender.drive <root_folder_id> <creds.json>
         with open(sys.argv[2]) as fh:
-            run(Drive(**json.load(fh)), sys.argv[1], time.time() + 3600)
+            run(Drive(**json.load(fh)), sys.argv[1], time.time() + 3000)
     else:
         _selfcheck()

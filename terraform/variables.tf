@@ -19,6 +19,10 @@ variable "image_tag" {
 variable "drive_root_folder_id" {
   description = "Google Drive folder id of the shared stl-automation root; <process>/in and /out live under it"
   type        = string
+  validation {
+    condition     = length(var.drive_root_folder_id) > 0
+    error_message = "drive_root_folder_id must be set (repo variable DRIVE_ROOT_FOLDER_ID)."
+  }
 }
 
 variable "poll_interval_minutes" {

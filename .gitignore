@@ -9,3 +9,5 @@ build/
 *.tfstate
 *.tfstate.backup
 client_secret*.json
+creds*.json
+*.creds.json

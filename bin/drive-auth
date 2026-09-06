@@ -11,8 +11,11 @@ screen published (a Testing-status app expires refresh tokens after 7 days).
 
 import http.server
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -21,7 +24,12 @@ SCOPE = "https://www.googleapis.com/auth/drive"
 
 
 def main(secret_file, secret_id, profile=None):
-    client = json.load(open(secret_file))["installed"]
+    if not shutil.which("aws"):
+        sys.exit("aws CLI not found on PATH")
+    with open(secret_file) as fh:
+        client = json.load(fh).get("installed")
+    if not client:
+        sys.exit(f"{secret_file}: not a Desktop-app client secret (no 'installed' key)")
     code = {}
 
     class Catch(http.server.BaseHTTPRequestHandler):
@@ -51,14 +59,23 @@ def main(secret_file, secret_id, profile=None):
     )).encode()
     with urllib.request.urlopen("https://oauth2.googleapis.com/token", body) as r:
         tok = json.load(r)
+    if "refresh_token" not in tok:
+        sys.exit(f"token exchange failed: {tok.get('error')}: {tok.get('error_description', tok)}")
     creds = dict(client_id=client["client_id"], client_secret=client["client_secret"],
                  refresh_token=tok["refresh_token"])
 
-    cmd = ["aws", "secretsmanager", "put-secret-value", "--secret-id", secret_id,
-           "--secret-string", json.dumps(creds)]
-    if profile:
-        cmd += ["--profile", profile]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    # via a 0600 temp file, not argv: argv is world-readable in the process list
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(creds, fh)
+        cmd = ["aws", "secretsmanager", "put-secret-value", "--secret-id", secret_id,
+               "--secret-string", f"file://{path}"]
+        if profile:
+            cmd += ["--profile", profile]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, timeout=60)
+    finally:
+        os.unlink(path)
     print(f"stored refresh token in {secret_id}")
 
 
