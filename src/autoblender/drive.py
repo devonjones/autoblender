@@ -4,9 +4,10 @@ Runs as a scheduled Lambda (handler) or locally (python -m autoblender.drive).
 Drive is the only state: an input is pending until a same-named file, or
 <name>.error.txt, exists in out/. Delete the out file to re-run an input.
 
-A placeholder <name>.error.txt is written before processing and removed on
-success, so a run the Lambda kills mid-file (timeout, OOM) leaves a visible
-error instead of head-of-line blocking every later tick.
+A placeholder <name>.error.txt is written before processing and removed when
+the file is done: a processing failure replaces it with the traceback (permanent
+until deleted), a Drive fault removes it (retried next tick), and a run the Lambda
+kills mid-file (timeout, OOM) leaves it. Nothing head-of-line blocks later ticks.
 ponytail: full folder listing per tick; fine to a few thousand files per folder.
 """
 
@@ -34,8 +35,9 @@ API = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
 TOKEN = "https://oauth2.googleapis.com/token"
 MARKER = ("processing started {started}\n"
-          "If this file is still here the run died (timeout, crash, or upload failure). "
-          "Delete it to retry.\n")
+          "If this file is still here the run died (timeout or crash). Delete it to retry.\n"
+          "If the output file is also here, the run succeeded and only this cleanup failed.\n")
+RESERVE = 300   # seconds kept back from the Lambda timeout; no new file starts inside it
 
 
 class Drive:
@@ -109,26 +111,40 @@ def pending(inputs, outputs):
             and f["name"] + ".error.txt" not in done]
 
 
-def process_one(drive, out_id, f, fn):
-    """Run `fn` on one input. Returns True on success; a failure leaves <name>.error.txt."""
-    err_name = f["name"] + ".error.txt"
-    started = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())
-    marker = drive.upload(out_id, err_name, MARKER.format(started=started).encode(), "text/plain")
+def _run(drive, out_id, f, fn):
+    """Download, process, upload. Returns a traceback string if `fn` failed, else None.
+    Drive faults propagate."""
     with tempfile.TemporaryDirectory() as d:
         src, dst = os.path.join(d, "in.stl"), os.path.join(d, "out.stl")
         drive.download(f["id"], src)
-        t = time.time()
         try:
             fn(src, dst)
         except Exception:
-            tb = traceback.format_exc()
-            drive.delete(marker)
-            drive.upload(out_id, err_name, tb.encode(), "text/plain")
-            print(f"{f['name']} FAILED\n{tb}", file=sys.stderr)
-            return False
+            return traceback.format_exc()
         drive.upload(out_id, f["name"], dst, "model/stl")
+    return None
+
+
+def process_one(drive, out_id, f, fn, label=""):
+    """One input. Returns True on success. A processing failure leaves
+    <name>.error.txt with the traceback; a Drive fault (download/upload) leaves
+    nothing behind so the next tick retries."""
+    err_name = f["name"] + ".error.txt"
+    started = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())
+    marker = drive.upload(out_id, err_name, MARKER.format(started=started).encode(), "text/plain")
+    t = time.time()
+    try:
+        failure = _run(drive, out_id, f, fn)
+    except Exception:
+        print(f"{label}{f['name']} drive fault, retrying next tick\n{traceback.format_exc()}", file=sys.stderr)
+        drive.delete(marker)
+        return False
     drive.delete(marker)
-    print(f"{f['name']} ok ({time.time() - t:.1f}s)", file=sys.stderr)
+    if failure:
+        drive.upload(out_id, err_name, failure.encode(), "text/plain")
+        print(f"{label}{f['name']} FAILED\n{failure}", file=sys.stderr)
+        return False
+    print(f"{label}{f['name']} ok ({time.time() - t:.1f}s)", file=sys.stderr)
     return True
 
 
@@ -140,8 +156,7 @@ def run(drive, root, deadline, processes=PROCESSES):
             if time.time() > deadline:
                 print(f"{name}: out of time, resuming next tick", file=sys.stderr)
                 return
-            print(f"{name}: ", end="", file=sys.stderr)
-            process_one(drive, out_id, f, fn)
+            process_one(drive, out_id, f, fn, label=f"{name}: ")
 
 
 def handler(event, context):
@@ -149,12 +164,12 @@ def handler(event, context):
 
     sm = boto3.client("secretsmanager")
     creds = json.loads(sm.get_secret_value(SecretId=os.environ["GOOGLE_OAUTH_SECRET_ARN"])["SecretString"])
-    deadline = time.time() + context.get_remaining_time_in_millis() / 1000 - 120
+    deadline = time.time() + context.get_remaining_time_in_millis() / 1000 - RESERVE
     run(Drive(**creds), os.environ["DRIVE_ROOT_FOLDER_ID"], deadline)
 
 
 class _FakeDrive:
-    """In-memory stand-in with the four methods run() uses."""
+    """In-memory stand-in with the five Drive methods run() and process_one() use."""
 
     def __init__(self):
         self.files = {}   # id -> (parent, name, bytes)
@@ -210,6 +225,45 @@ def _selfcheck():
     run(d, "root", time.time() - 1, {"p": upper})
     assert not any(p == "root/p/out" and n.startswith("late.stl") for (p, n, _) in d.files.values()), \
         "past deadline must not process"
+
+    # a Drive fault on the output upload leaves nothing behind, doesn't stop the tick,
+    # and the file is retried on the next one
+    class _FlakyDrive(_FakeDrive):
+        tripped = False
+
+        def upload(self, parent, name, src, mime=""):
+            if mime == "model/stl" and not self.tripped:
+                self.tripped = True
+                raise OSError("drive 503")
+            return super().upload(parent, name, src, mime)
+
+    d = _FlakyDrive()
+    d.upload("root/p/in", "x.stl", b"x")
+    d.upload("root/p/in", "y.stl", b"y")
+    run(d, "root", time.time() + 60, {"p": upper})
+    out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
+    assert out == {"y.stl"}, out            # x faulted: no marker left; y still processed
+    run(d, "root", time.time() + 60, {"p": upper})
+    out = {n for (p, n, _) in d.files.values() if p == "root/p/out"}
+    assert out == {"x.stl", "y.stl"}, out
+
+    # the real upload(): bytes and path bodies both reach the PUT with a Content-Length
+    calls = []
+    real = Drive.__new__(Drive)
+    real.hdr = {}
+
+    class _R:
+        headers = {"Location": "session"}
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    real._open = lambda url, data=None, method=None, **h: _R()
+    real._json = lambda url, data=None, method=None, **h: calls.append((data if isinstance(data, bytes) else data.read(), h)) or {"id": "i"}
+    assert real.upload("out", "a", b"abc") == "i" and calls[-1] == (b"abc", {"Content-Type": "application/octet-stream", "Content-Length": "3"})
+    with tempfile.NamedTemporaryFile(suffix=".stl") as tmp:
+        tmp.write(b"hello"); tmp.flush()
+        real.upload("out", "b", tmp.name, "model/stl")
+    assert calls[-1] == (b"hello", {"Content-Type": "model/stl", "Content-Length": "5"}), calls[-1]
     print("drive selfcheck ok")
 
 

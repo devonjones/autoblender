@@ -60,7 +60,8 @@ def main(secret_file, secret_id, profile=None):
     with urllib.request.urlopen("https://oauth2.googleapis.com/token", body) as r:
         tok = json.load(r)
     if "refresh_token" not in tok:
-        sys.exit(f"token exchange failed: {tok.get('error')}: {tok.get('error_description', tok)}")
+        sys.exit(f"token exchange failed: {tok.get('error', 'no refresh_token in response')}: "
+                 f"{tok.get('error_description', '')}")
     creds = dict(client_id=client["client_id"], client_secret=client["client_secret"],
                  refresh_token=tok["refresh_token"])
 

@@ -104,6 +104,13 @@ resource "aws_cloudwatch_event_rule" "tick" {
 resource "aws_cloudwatch_event_target" "tick" {
   rule = aws_cloudwatch_event_rule.tick.name
   arn  = aws_lambda_function.drive.arn
+
+  # Same reasoning as the invoke config: a tick EventBridge can't deliver now is
+  # superseded by the next one, never replayed later.
+  retry_policy {
+    maximum_event_age_in_seconds = 60
+    maximum_retry_attempts       = 0
+  }
 }
 
 resource "aws_lambda_permission" "tick" {
