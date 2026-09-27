@@ -5,11 +5,8 @@ IMAGE="${AUTOBLENDER_IMAGE:-autoblender:latest}"
 
 # AB_ENTRYPOINT=python ab script.py  -- run a bpy script with the same mounts
 # the CLI gets, instead of hand-writing a docker line and forgetting one.
-ENTRY=()
-[ -n "${AB_ENTRYPOINT:-}" ] && ENTRY=(--entrypoint "$AB_ENTRYPOINT")
-
 exec docker run --rm -i \
-    ${ENTRY[@]+"${ENTRY[@]}"} \
+    ${AB_ENTRYPOINT:+--entrypoint "$AB_ENTRYPOINT"} \
     --user "$(id -u):$(id -g)" \
     -e HOME=/tmp \
     -e AB_HOST_PWD="$PWD" \

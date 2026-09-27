@@ -169,8 +169,9 @@ for name, off, mat in (("base", a.base, stone("base", brush=False)),
 bpy.context.view_layer.update()
 
 if a.join:
-    import numpy as np, trimesh
+    import numpy as np
     from manifold3d import Error, Manifold, Mesh, OpType
+    from autoblender.union import to_trimesh
     ms = []
     for name, o in parts.items():
         me = o.data
@@ -185,8 +186,7 @@ if a.join:
     j = Manifold.batch_boolean(ms, OpType.Add)
     if j.status() != Error.NoError:
         raise RuntimeError(f"--join: union failed: {j.status()}")
-    jm = j.to_mesh()
-    trimesh.Trimesh(jm.vert_properties[:, :3], jm.tri_verts).export(a.join)
+    to_trimesh(j).export(a.join)
     print(f"# joined -> {a.join}: {j.num_tri()} tris, genus {j.genus()}, "
           f"vol {j.volume():.0f} (parts sum {sum(m.volume() for m in ms):.0f})")
 
