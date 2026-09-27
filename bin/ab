@@ -9,7 +9,7 @@ ENTRY=()
 [ -n "${AB_ENTRYPOINT:-}" ] && ENTRY=(--entrypoint "$AB_ENTRYPOINT")
 
 exec docker run --rm -i \
-    "${ENTRY[@]}" \
+    ${ENTRY[@]+"${ENTRY[@]}"} \
     --user "$(id -u):$(id -g)" \
     -e HOME=/tmp \
     -e AB_HOST_PWD="$PWD" \

@@ -106,7 +106,7 @@ Test renders db01–db04 in the session; db04 is the keeper (db03 coverage with 
   coverage).
 - **The base is left out.** It's only about 3k faces, so Pointiness smears across whole
   faces and the frame turns uniformly pale. It keeps the basecoat.
-- **Nothing below world z 7.6** (`--db-min-z`). The floor's bottom 1.5mm is a square-cut slab
+- **Nothing below world z 7.6** (`--db-min-z`). The floor's bottom ~1.6mm is a square-cut slab
   of big triangles, and the same smearing turned it into a white band. The value is base
   top (6) plus slab (1.6), specific to this build.
 
@@ -114,8 +114,8 @@ Test renders db01–db04 in the session; db04 is the keeper (db03 coverage with 
 
 ## Run it
 
-`bin/ab` mounts `$PWD`, `/home` and `/mnt` but not `/tmp`, so the working directory must be
-under one of those.
+`bin/ab` mounts the current directory as `/work`, plus `/home` and `/mnt`. Run from the
+directory holding the STLs; the script path must be under `/home` or `/mnt`.
 
 ```
 mkdir -p ~/wot && cd ~/wot

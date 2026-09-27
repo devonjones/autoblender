@@ -15,6 +15,7 @@ import argparse, math, os, sys
 import bpy
 from mathutils import Vector, Matrix
 from autoblender import shot as S
+from autoblender.ops import import_stl
 
 p = argparse.ArgumentParser()
 p.add_argument("out")
@@ -93,7 +94,7 @@ def _drybrush(nt, colour):
     patchy = _math(nt, "MAXIMUM", patch.outputs["Color"], 1.0 - a.db_break)
     fac = _math(nt, "MULTIPLY", edge.outputs["Color"], up)
     fac = _math(nt, "MULTIPLY", fac, patchy)
-    # The floor's bottom 1.5mm is a square-cut slab of big triangles; pointiness
+    # The floor's bottom ~1.6mm is a square-cut slab of big triangles; pointiness
     # smears across it into a pale band. A brush from above never reaches it anyway.
     # ponytail: tile-space z for this build (base top 6 + slab 1.6); other builds
     # with a different base height need --db-min-z.
@@ -160,9 +161,7 @@ parts = {}
 for name, off, mat in (("base", a.base, stone("base", brush=False)),
                        ("floor", a.floor, stone("floor")),
                        ("wall", a.wall, stone("wall"))):
-    before = set(bpy.data.objects)
-    bpy.ops.wm.stl_import(filepath=f"{name}.stl")
-    o = (set(bpy.data.objects) - before).pop()
+    o = import_stl(f"{name}.stl")
     o.name = name
     o.matrix_world = spin @ Matrix.Translation(vec(off))
     o.data.materials.append(mat)
@@ -171,15 +170,21 @@ bpy.context.view_layer.update()
 
 if a.join:
     import numpy as np, trimesh
-    from manifold3d import Manifold, Mesh, OpType
+    from manifold3d import Error, Manifold, Mesh, OpType
     ms = []
-    for o in parts.values():
+    for name, o in parts.items():
         me = o.data
         v = np.array([(o.matrix_world @ x.co)[:] for x in me.vertices], np.float32)
         me.calc_loop_triangles()
         t = np.array([lt.vertices[:] for lt in me.loop_triangles], np.uint32)
-        ms.append(Manifold(Mesh(vert_properties=v, tri_verts=t)))
+        m = Manifold(Mesh(vert_properties=v, tri_verts=t))
+        # a rejected part comes back empty and would silently drop out of the union
+        if m.status() != Error.NoError:
+            raise RuntimeError(f"--join: manifold3d rejected {name}: {m.status()}")
+        ms.append(m)
     j = Manifold.batch_boolean(ms, OpType.Add)
+    if j.status() != Error.NoError:
+        raise RuntimeError(f"--join: union failed: {j.status()}")
     jm = j.to_mesh()
     trimesh.Trimesh(jm.vert_properties[:, :3], jm.tri_verts).export(a.join)
     print(f"# joined -> {a.join}: {j.num_tri()} tris, genus {j.genus()}, "
