@@ -69,6 +69,8 @@ def list_geometry_node_groups():
                 info["default"] = item.default_value
             except AttributeError:
                 pass
+            if item.socket_type == "NodeSocketMenu" and item.in_out == "INPUT":
+                info["items"] = [name for _, name in _menu_items(ng, item.identifier)]
             if item.in_out == "INPUT":
                 inputs.append(info)
             elif item.in_out == "OUTPUT":
@@ -77,7 +79,29 @@ def list_geometry_node_groups():
     return groups
 
 
-def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None):
+def _set_boolean_solver(ng, solver, seen=None):
+    """Override the solver on every Mesh Boolean in a tree, nested groups included.
+
+    Libraries ship these set to EXACT, which fails hard on some cores -- it
+    returned a 162-poly sliver for dungeon_stone wall.D with side locks, where
+    MANIFOLD and FLOAT both produced the correct 310k-poly wall.
+    """
+    seen = seen if seen is not None else set()
+    if ng.name in seen:
+        return 0
+    seen.add(ng.name)
+    n = 0
+    for node in ng.nodes:
+        if node.bl_idname == "GeometryNodeMeshBoolean":
+            node.solver = solver
+            n += 1
+        elif node.type == "GROUP" and node.node_tree:
+            n += _set_boolean_solver(node.node_tree, solver, seen)
+    return n
+
+
+def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None, solver=None,
+                         nudge_z=0.0):
     ng = bpy.data.node_groups.get(node_group_name)
     if ng is None:
         with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
@@ -89,6 +113,26 @@ def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None):
         ng = bpy.data.node_groups.get(node_group_name)
         if ng is None:
             raise RuntimeError(f"failed to load node group {node_group_name!r}")
+
+    if solver:
+        n = _set_boolean_solver(ng, solver)
+        print(f"# gn: boolean solver -> {solver} on {n} node(s)")
+
+    if nudge_z:
+        # The OpenForge cut plane sits at the base height.  Where the stone
+        # texture is tangent to it the cut leaves paper-thin flanges instead of
+        # a clean face, so drop the piece slightly and let the plane bite into
+        # solid material.
+        #
+        # This MUST go into the mesh data, not obj.location: a geometry nodes
+        # modifier evaluates in the object's local space, so moving the object
+        # leaves the geometry exactly where the group's cut plane expects it and
+        # the nudge does nothing at all.
+        from mathutils import Matrix
+        obj.data.transform(Matrix.Translation((0.0, 0.0, nudge_z)))
+        obj.data.update()
+        bpy.context.view_layer.update()
+        print(f"# gn: nudged mesh {nudge_z:+.3f} in z before the cut")
 
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new("GeometryNodes", "NODES")

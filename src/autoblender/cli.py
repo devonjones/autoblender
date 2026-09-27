@@ -131,7 +131,8 @@ def cmd_gn_apply(args):
     with input_stl_path(args.input) as ip, output_stl_path(args.output) as op:
         ops.reset_scene()
         obj = ops.import_stl(ip)
-        ops.apply_geometry_nodes(obj, args.node_group, args.blend, overrides or None)
+        ops.apply_geometry_nodes(obj, args.node_group, args.blend, overrides or None,
+                                 solver=args.solver, nudge_z=args.nudge_z)
         ops.export_stl(obj, op)
 
 
@@ -144,7 +145,8 @@ def cmd_gn_list(args):
         print(f"\n{g['name']}", file=out)
         for s in g["inputs"]:
             d = f"  = {s['default']!r}" if "default" in s else ""
-            print(f"  in   {s['type']:24s} {s['name']}{d}", file=out)
+            items = f"  {{{', '.join(s['items'])}}}" if s.get("items") else ""
+            print(f"  in   {s['type']:24s} {s['name']}{d}{items}", file=out)
         for s in g["outputs"]:
             print(f"  out  {s['type']:24s} {s['name']}", file=out)
     users = ops.list_geometry_node_modifier_users()
@@ -477,6 +479,18 @@ def main():
         default=[],
         metavar="NAME=VALUE",
         help="Override an input socket value; repeatable",
+    )
+    sp.add_argument(
+        "--nudge-z", type=float, default=0.0, metavar="MM",
+        help="Shift the piece in z before applying the group. Use a small "
+             "negative value (-0.02) so the OpenForge cut plane bites into solid "
+             "stone instead of grazing the texture and leaving thin flanges.",
+    )
+    sp.add_argument(
+        "--solver",
+        choices=["EXACT", "FLOAT", "MANIFOLD"],
+        help="Override the solver on every Mesh Boolean in the group "
+             "(libraries ship EXACT, which fails on some cores)",
     )
     sp.set_defaults(fn=cmd_gn_apply)
 
