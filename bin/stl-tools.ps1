@@ -88,7 +88,8 @@ function Queue-Path($op, $opts, $path) {
         $out = "$root.$($op.name)"
         foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File -Filter *.stl) {
             $rel = $f.FullName.Substring($root.Length + 1)
-            if (($rel -split '\\') -contains $op.name) { continue }   # output of an earlier single-file drop
+            # skip earlier output: <tool>\ from single-file drops, <folder>.<tool>\ from folder drops
+            if (@($rel -split '\\' | Where-Object { $_ -eq $op.name -or $_ -like "*.$($op.name)" }).Count) { continue }
             Add-Job $op $opts $f.FullName (Join-Path $out $rel)
         }
     }
