@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+*.stl
+*.blend
+*.blend1
+.terraform/
+*.tfstate
+*.tfstate.backup
+client_secret*.json
+creds*.json
+*.creds.json
+.env
+dist/

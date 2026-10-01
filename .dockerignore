@@ -6,3 +6,11 @@ bin/
 *.stl
 *.blend
 *.blend1
+terraform/
+shots/
+.github/
+client_secret*.json
+creds*.json
+*.creds.json
+.env
+dist/

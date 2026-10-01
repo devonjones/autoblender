@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Build the STL Tools zip for one environment: the client plus a .env holding that
+# environment's API URL and key. Mints the key on first use, or again with --rotate
+# (warm Lambdas pick a rotated key up within 5 minutes; old zips stop working).
+#
+#   bin/package-stl-tools <staging|production> <aws-profile> [--rotate]
+#
+# Writes dist/stl-tools-<env>.zip. dist/ is gitignored: the zip holds the key.
+# Nothing secret is printed.
+
+set -euo pipefail
+
+ENVIRONMENT="${1:?usage: $0 <staging|production> <aws-profile> [--rotate]}"
+PROFILE="${2:?aws profile for the target account}"
+ROTATE="${3:-}"
+NAME="autoblender-${ENVIRONMENT}"
+SECRET="${NAME}/api-key"
+cd "$(dirname "$0")/.."
+
+aws_() { aws --profile "$PROFILE" --region us-east-1 "$@"; }
+
+# Mint only when the secret has never had a value. Any AWS error (expired session,
+# wrong profile) stops the script instead of rotating the key under every zip out there.
+HAS_KEY=$(aws_ secretsmanager list-secret-version-ids --secret-id "$SECRET" \
+  --query "length(Versions[?contains(VersionStages, 'AWSCURRENT')])" --output text)
+if [ "$ROTATE" = "--rotate" ] || [ "$HAS_KEY" = "0" ]; then
+  # by stdin, never argv: argv is world-readable in /proc
+  python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' |
+    aws_ secretsmanager put-secret-value --secret-id "$SECRET" --secret-string file:///dev/stdin >/dev/null
+  echo "minted a new API key in $SECRET" >&2
+fi
+
+URL=$(aws_ lambda get-function-url-config --function-name "${NAME}-api" --query FunctionUrl --output text)
+KEY=$(aws_ secretsmanager get-secret-value --secret-id "$SECRET" --query SecretString --output text)
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+DIR="$TMP/STL Tools"
+mkdir "$DIR"
+cp bin/stl-tools.ps1 "$DIR/"
+cp bin/stl-tools.cmd "$DIR/STL Tools.cmd"
+(umask 077; printf 'AB_URL=%s\r\nAB_KEY=%s\r\n' "$URL" "$KEY" > "$DIR/.env")
+
+mkdir -p dist
+OUT="dist/stl-tools-${ENVIRONMENT}.zip"
+rm -f "$OUT"
+(cd "$TMP" && zip -qr - "STL Tools") > "$OUT"
+echo "wrote $OUT for $URL" >&2
