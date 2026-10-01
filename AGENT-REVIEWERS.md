@@ -2,7 +2,7 @@
 
 ```json
 {
-  "defaults_version_checked": "1.7.0",
+  "defaults_version_checked": "1.8.0",
   "disabled": [
     "silent-failure-hunter",
     "comment-analyzer",
@@ -75,8 +75,8 @@ Read `.reviewers/external-process-reviewer.md` and follow it as your complete re
 
 ## credentials-hygiene-reviewer
 
-**What it checks:** literal secrets committed (P1), OAuth artifacts (`client_secret*.json`, token dumps) in the diff or image (P1), tokens in URLs, tokens echoed to output, refresh-token persistence outside Secrets Manager.
-**When to spawn:** PR touches auth/token code, `bin/drive-auth`, `.gitignore`/`.dockerignore`, the Dockerfile, or tofu secrets. Cheap — when in doubt, spawn it.
+**What it checks:** literal secrets committed (P1), credential files or key-bearing zips/`.env` in the diff or image (P1), keys in URLs, keys echoed to output, key persistence outside Secrets Manager.
+**When to spawn:** PR touches auth/key code (`api.py`, `bin/package-stl-tools`, `bin/stl-tools.ps1`), `.gitignore`/`.dockerignore`, the Dockerfile, or tofu secrets. Cheap — when in doubt, spawn it.
 
 Read `.reviewers/credentials-hygiene-reviewer.md` and follow it as your complete review specification.
 
@@ -157,7 +157,7 @@ Skip reviewers whose file scope doesn't match the PR diff (`general-reviewer` al
 
 ## Always do PRs
 
-All work goes through pull requests — never push directly to `main`. Merge only after CI passes and the review loop is done.
+All work goes through pull requests against `test` (the default branch); `main` only takes release PRs from `test`. Merge only after CI passes and the review loop is done.
 
 ## Severity convention
 
@@ -193,8 +193,8 @@ Suggested fix:
 
 # Context
 
-autoblender is a Unix-style CLI (`ab`) over headless bpy, trimesh, and manifold3d, run through Docker (`bin/ab`). `src/autoblender/drive.py` is also the handler of a container Lambda that watches a Google Drive folder tree and runs `PROCESSES` on dropped STLs; `terraform/` deploys it on a 1-minute EventBridge rate, reading ECR and CI-role outputs from `openforge-infra`.
+autoblender is a Unix-style CLI (`ab`) over headless bpy, trimesh, and manifold3d, run through Docker (`bin/ab`). `src/autoblender/api.py` is also the handler of a container Lambda behind a function URL: the STL Tools desktop client (`bin/stl-tools.ps1`, Windows PowerShell 5.1 + WinForms) uploads STLs through S3 presigned URLs and runs `PROCESSES` on them. `terraform/` deploys it, reading ECR and CI-role outputs from `openforge-infra`.
 
-Conventions: `import bpy` is deferred until a command needs it (7s import). Modules that don't need Blender (`union.py`, `cut.py`, `drive.py`) must stay bpy-free. Tests are `_selfcheck()` functions run with `python -m autoblender.<module>` in the image; there is no pytest. Deliberate corner-cuts are marked with `ponytail:` comments naming the ceiling.
+Conventions: `import bpy` is deferred until a command needs it (7s import). Modules that don't need Blender (`union.py`, `cut.py`, `api.py`) must stay bpy-free. Tests are `_selfcheck()` functions run with `python -m autoblender.<module>` in the image; there is no pytest. Deliberate corner-cuts are marked with `ponytail:` comments naming the ceiling. PowerShell scripts stay 5.1-compatible and ASCII-only.
 
-CI: `.github/workflows/deploy.yml` builds the `lambda` image target, pushes to ECR, and runs `tofu apply` for staging on push to `main`. No test workflow yet.
+CI: `.github/workflows/deploy.yml` builds the `lambda` image target, pushes to ECR, and runs `tofu apply`: push to `test` deploys staging, push to `main` deploys production. No test workflow yet.

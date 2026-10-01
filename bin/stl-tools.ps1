@@ -76,7 +76,7 @@ function Add-Job($op, $opts, $src, $dst) {
     [void]$list.Items.Add($item)
     [void]$Jobs.Add([pscustomobject]@{
         Op = $op.name; Options = $opts; Src = $src; Dst = $dst; Step = 'queued'
-        Task = $null; Id = ''; Stream = $null; Item = $item
+        Task = $null; Id = ''; Stream = $null; Item = $item; NotBefore = [datetime]::MinValue
     })
 }
 
@@ -86,7 +86,9 @@ function Queue-Path($op, $opts, $path) {
         $root = $path.TrimEnd('\')
         $out = "$root.$($op.name)"
         foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File -Filter *.stl) {
-            Add-Job $op $opts $f.FullName (Join-Path $out $f.FullName.Substring($root.Length + 1))
+            $rel = $f.FullName.Substring($root.Length + 1)
+            if (($rel -split '\\') -contains $op.name) { continue }   # output of an earlier single-file drop
+            Add-Job $op $opts $f.FullName (Join-Path $out $rel)
         }
     }
     elseif ($path -like '*.stl') {
@@ -136,21 +138,30 @@ function Advance($j) {
     }
 }
 
+# Advance, turning any error into a failed job. A 429 means every Lambda slot is busy
+# (another client, or a quit client's runs still finishing): requeue after a pause.
+function Try-Advance($j) {
+    try { Advance $j }
+    catch {
+        if ($j.Stream) { $j.Stream.Dispose(); $j.Stream = $null }
+        $j.Task = $null
+        if ("$_" -like 'HTTP 429*') {
+            $j.NotBefore = (Get-Date).AddSeconds(15)
+            Set-Step $j 'queued' 'busy, retrying'
+        }
+        else { Set-Step $j 'failed' "$_" }
+    }
+}
+
 function Tick {
     foreach ($j in @($Jobs)) {
-        if ($Active -contains $j.Step -and $j.Task.IsCompleted) {
-            try { Advance $j }
-            catch {
-                if ($j.Stream) { $j.Stream.Dispose(); $j.Stream = $null }
-                $j.Task = $null
-                Set-Step $j 'failed' "$_"
-            }
-        }
+        if ($Active -contains $j.Step -and $j.Task.IsCompleted) { Try-Advance $j }
     }
     $busy = @($Jobs | Where-Object { $Active -contains $_.Step }).Count
-    foreach ($j in @($Jobs | Where-Object Step -eq 'queued')) {
+    $now = Get-Date
+    foreach ($j in @($Jobs | Where-Object { $_.Step -eq 'queued' -and $_.NotBefore -le $now })) {
         if ($busy -ge $MaxJobs) { break }
-        Advance $j
+        Try-Advance $j
         $busy++
     }
     $n = @{}

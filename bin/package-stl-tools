@@ -19,8 +19,11 @@ cd "$(dirname "$0")/.."
 
 aws_() { aws --profile "$PROFILE" --region us-east-1 "$@"; }
 
-if [ "$ROTATE" = "--rotate" ] || ! aws_ secretsmanager get-secret-value --secret-id "$SECRET" \
-     --query VersionId --output text >/dev/null 2>&1; then
+# Mint only when the secret has never had a value. Any AWS error (expired session,
+# wrong profile) stops the script instead of rotating the key under every zip out there.
+HAS_KEY=$(aws_ secretsmanager list-secret-version-ids --secret-id "$SECRET" \
+  --query "length(Versions[?contains(VersionStages, 'AWSCURRENT')])" --output text)
+if [ "$ROTATE" = "--rotate" ] || [ "$HAS_KEY" = "0" ]; then
   # by stdin, never argv: argv is world-readable in /proc
   python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' |
     aws_ secretsmanager put-secret-value --secret-id "$SECRET" --secret-string file:///dev/stdin >/dev/null

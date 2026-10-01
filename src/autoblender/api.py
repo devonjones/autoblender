@@ -12,7 +12,9 @@ expires everything after a day. The client draws one tab per op and one
 checkbox per option, so adding a tool is one PROCESSES entry and a deploy.
 """
 
+import base64
 import hmac
+import inspect
 import json
 import os
 import re
@@ -55,8 +57,10 @@ def _api_key():
     if time.time() - _cache.get("key_at", 0) > KEY_TTL:
         import boto3
         sm = boto3.client("secretsmanager")
-        _cache["key"] = sm.get_secret_value(SecretId=os.environ["API_KEY_SECRET_ARN"])["SecretString"].strip()
-        _cache["key_at"] = time.time()
+        key = sm.get_secret_value(SecretId=os.environ["API_KEY_SECRET_ARN"])["SecretString"].strip()
+        if not key:   # fail closed: an empty key would match a request with no header
+            raise RuntimeError("API key secret is empty")
+        _cache["key"], _cache["key_at"] = key, time.time()
     return _cache["key"]
 
 
@@ -78,8 +82,8 @@ def run_job(job, op, options):
         src, dst = os.path.join(tmp, "in.stl"), os.path.join(tmp, "out.stl")
         try:
             s3.download_file(bucket, f"in/{job}.stl", src)
-        except Exception as e:
-            if "404" in str(e) or "NoSuchKey" in str(e):
+        except Exception as e:   # botocore ClientError; botocore isn't importable outside the image
+            if getattr(e, "response", {}).get("Error", {}).get("Code") in ("404", "NoSuchKey"):
                 return _resp(404, {"error": "upload not found (expired, or the upload failed)"})
             raise
         t = time.time()
@@ -113,13 +117,12 @@ def route(event):
         if not JOB_ID.fullmatch(m[1]):
             return _resp(400, {"error": "bad job id"})
         body = event.get("body") or "{}"
-        if event.get("isBase64Encoded"):
-            import base64
-            body = base64.b64decode(body).decode()
-        try:
-            req = json.loads(body)
+        try:   # base64, utf-8 and JSON errors are all ValueErrors
+            req = json.loads(base64.b64decode(body).decode() if event.get("isBase64Encoded") else body)
         except ValueError:
             return _resp(400, {"error": "body is not JSON"})
+        if not isinstance(req, dict) or not isinstance(req.get("options") or {}, dict):
+            return _resp(400, {"error": "body must be {\"op\": ..., \"options\": {...}}"})
         if req.get("op") not in PROCESSES:
             return _resp(400, {"error": f"unknown op {req.get('op')!r}"})
         return run_job(m[1], req["op"], req.get("options") or {})
@@ -144,7 +147,9 @@ def _selfcheck():
 
         def download_file(self, bucket, key, path):
             if key not in self.objs:
-                raise RuntimeError("An error occurred (404) when calling the HeadObject operation")
+                e = RuntimeError("An error occurred (404) when calling the HeadObject operation")
+                e.response = {"Error": {"Code": "404"}}
+                raise e
             with open(path, "wb") as fh:
                 fh.write(self.objs[key])
 
@@ -158,14 +163,19 @@ def _selfcheck():
             raise ValueError("boom")
         open(dst, "wb").write(data.upper() if shout else data)
 
+    for name, p in PROCESSES.items():   # every declared option must be a parameter of its fn
+        params = inspect.signature(p["fn"]).parameters
+        assert set(p["options"]) <= set(params), (name, set(p["options"]) - set(params))
+
     s3 = FakeS3()
     _cache.update(s3=s3, key="sekrit", key_at=time.time())
     os.environ["BUCKET"] = "b"
     PROCESSES["t"] = dict(label="T", help="", fn=upper, options={"shout": ("Shout", True)})
 
-    def call(method, path, body=None, key="sekrit"):
-        r = route(dict(headers={"X-Api-Key": key}, rawPath=path, body=json.dumps(body) if body else None,
-                       requestContext=dict(http=dict(method=method))))
+    def call(method, path, body=None, key="sekrit", raw=None, b64=False):
+        r = handler(dict(headers={"X-Api-Key": key}, rawPath=path, isBase64Encoded=b64,
+                         body=raw if raw is not None else json.dumps(body) if body else None,
+                         requestContext=dict(http=dict(method=method))), None)
         return r["statusCode"], json.loads(r["body"])
 
     assert call("GET", "/ops", key="nope")[0] == 401
@@ -184,8 +194,30 @@ def _selfcheck():
     st, b = call("POST", f"/jobs/{job}/run", {"op": "t"})
     assert st == 422 and b["error"] == "ValueError: boom", (st, b)
     assert call("POST", f"/jobs/{job}/run", {"op": "nope"})[0] == 400
+    s3.objs[f"in/{job}.stl"] = b"hi"
+    raw = base64.b64encode(json.dumps({"op": "t", "options": {"shout": False}}).encode()).decode()
+    st, b = call("POST", f"/jobs/{job}/run", raw=raw, b64=True)
+    assert st == 200 and s3.objs[f"out/{job}.stl"] == b"hi", (st, b)
+    for raw, b64 in (("{nope", False), ("!!notbase64", True), ("[1]", False), ('{"op": "t", "options": [1]}', False)):
+        assert call("POST", f"/jobs/{job}/run", raw=raw, b64=b64)[0] == 400, raw
     assert call("POST", "/jobs/..%2Fx/run", {"op": "t"})[0] == 400
     assert call("DELETE", "/jobs")[0] == 404
+    s3.objs.pop(f"in/{job}.stl")
+    s3.download_file = None   # any unexpected exception is a 500 with no detail
+    assert call("POST", f"/jobs/{job}/run", {"op": "t"}) == (500, {"error": "internal error, see the Lambda log"})
+
+    # the real registry entry, end to end: cut-6mm on a 10mm cube standing on z=0
+    import io
+    import trimesh
+    s3 = FakeS3()
+    _cache["s3"] = s3
+    box = trimesh.creation.box(extents=[10, 10, 10])
+    box.apply_translation([0, 0, 5])
+    s3.objs[f"in/{job}.stl"] = box.export(file_type="stl")
+    for drop, zmin in ((True, 0.0), (False, 6.0)):
+        st, b = call("POST", f"/jobs/{job}/run", {"op": "cut-6mm", "options": {"drop": drop}})
+        out = trimesh.load(io.BytesIO(s3.objs[f"out/{job}.stl"]), file_type="stl")
+        assert st == 200 and abs(out.bounds[0][2] - zmin) < 1e-4 and abs(out.volume - 400) < 1e-3, (drop, st, b, out.bounds)
     print("api selfcheck ok")
 
 

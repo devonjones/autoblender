@@ -54,6 +54,9 @@ jobs:
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --cache-from $IMAGE:latest \
             -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+          for m in union cut api; do
+            docker run --rm --entrypoint python $IMAGE:${{ github.sha }} -m autoblender.$m
+          done
           docker push $IMAGE:${{ github.sha }}
           docker push $IMAGE:latest
 

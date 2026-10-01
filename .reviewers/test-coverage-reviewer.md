@@ -14,7 +14,7 @@ The unit of obligation is *coverage of the touched code*, not *net-new test func
 
 3. **New behavior needs new assertions.** Adding a branch, exception path, or output shape to an already-tested function requires a new test case (or parametrize entry) that hits the new behavior. Reusing the existing test name without new assertions is not coverage.
 
-4. **Test file naming and structure.** This repo has no pytest suite. The convention is a `_selfcheck()` function under `if __name__ == "__main__":` in each module with non-trivial logic (see `union.py`, `cut.py`, `drive.py`), run as `python -m autoblender.<module>` inside the image. A pure function's selfcheck asserts on synthetic inputs (trimesh primitives, fake file lists); the check must actually fail if the logic breaks. Recognize as valid coverage:
+4. **Test file naming and structure.** This repo has no pytest suite. The convention is a `_selfcheck()` function under `if __name__ == "__main__":` in each module with non-trivial logic (see `union.py`, `cut.py`, `api.py`), run as `python -m autoblender.<module>` inside the image. A pure function's selfcheck asserts on synthetic inputs (trimesh primitives, fake file lists); the check must actually fail if the logic breaks. Recognize as valid coverage:
    - `assert` statements inside a module `_selfcheck()` that exercise the touched function
    - Top-level `def test_*(...)` functions
    - `class Test...:` test classes with `def test_*` methods

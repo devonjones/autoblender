@@ -11,6 +11,8 @@ from .union import union_mesh, to_trimesh
 
 def cut_mesh(tm, z, keep="above", drop=True):
     """Return (trimesh part on `keep` side of z, union report). drop: move the part down to z=0."""
+    if keep not in ("above", "below"):
+        raise ValueError(f"keep must be 'above' or 'below', got {keep!r}")
     man, report = union_mesh(tm)
     if keep == "above":
         part = man.trim_by_plane((0, 0, 1), z)
@@ -41,6 +43,11 @@ def _selfcheck():
     assert abs(bottom.bounds[1][2] - 7) < 1e-6, bottom.bounds
     kept, _ = cut_mesh(box, 2.0, "above", drop=False)
     assert abs(kept.bounds[0][2] - 2) < 1e-6, kept.bounds
+    try:
+        cut_mesh(box, 2.0, "abvoe")
+        raise AssertionError("expected a bad keep to raise")
+    except ValueError:
+        pass
     try:
         cut_mesh(box, 50.0)
         raise AssertionError("expected empty cut to raise")

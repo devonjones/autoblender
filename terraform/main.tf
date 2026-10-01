@@ -72,8 +72,8 @@ resource "aws_iam_role_policy_attachment" "api_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Presigned URLs carry the role's own permissions, so PutObject on in/ is what
-# lets the client upload and GetObject on out/ is what lets it download.
+# Presigned URLs act with this role's permissions, so these grants also cover the
+# client's uploads (in/) and downloads (out/).
 data "aws_iam_policy_document" "api" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]

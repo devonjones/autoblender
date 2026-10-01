@@ -1,6 +1,6 @@
 # credentials-hygiene-reviewer
 
-Review PRs for **secrets and credential handling**. This repo holds a Google OAuth client (client id/secret + a long-lived Drive refresh token) and deploys to AWS. Credentials live in Secrets Manager (written by `bin/drive-auth`) or the environment and must never enter the repo, the image, its logs, or its test data.
+Review PRs for **secrets and credential handling**. This repo deploys to AWS and guards one shared secret: the STL Tools API key, stored in Secrets Manager (minted by `bin/package-stl-tools`) and shipped to the client inside a gitignored zip as `.env`. Credentials live in Secrets Manager or the environment and must never enter the repo, the image, its logs, or its test data.
 
 **What to flag:**
 
@@ -12,7 +12,7 @@ Review PRs for **secrets and credential handling**. This repo holds a Google OAu
 
 4. **Secrets echoed to output (P1):** tokens in exception messages, `print()` diagnostics, CLI output, or assertion messages. (Log-call interpolation is `logging-reviewer`'s beat — this covers the non-logging leak paths.) Also flag debug endpoints or CLI flags that dump full config including credentials.
 
-5. **Insecure storage of tokens the tool persists (P2):** `bin/drive-auth` persists the Drive refresh token. Flag: tokens written into the repo tree, into fixture files, into world-readable paths, or into files not covered by `.gitignore`. Acceptable: env files outside the repo, `~/.config`-style dotfiles with `0600`-style expectations, OS keyring.
+5. **Insecure storage of tokens the tool persists (P2):** `bin/package-stl-tools` writes the API key into a `.env` inside `dist/`. Flag: tokens written into the repo tree, into fixture files, into world-readable paths, or into files not covered by `.gitignore`. Acceptable: env files outside the repo, `~/.config`-style dotfiles with `0600`-style expectations, OS keyring.
 
 6. **Test fixtures with realistic-looking credentials (P3):** tests should use obviously-fake values (`"test-token"`, `"fake-client-id"`), not plausible or expired-real ones. An expired-real JWT in a test still reveals account ids, scopes, and endpoint shapes.
 
@@ -21,7 +21,7 @@ Review PRs for **secrets and credential handling**. This repo holds a Google OAu
 **Do NOT flag:**
 
 - Reading credentials from `os.environ` / env files — that's the correct pattern.
-- Public identifiers that aren't secrets (Drive folder ids, AWS account ids, bucket names, ARNs).
+- Public identifiers that aren't secrets (function URLs, AWS account ids, bucket names, ARNs).
 - Example placeholders in docs (`<your-token-here>`, `sk-xxxx...`).
 - The word "token"/"secret" in variable names, comments, or docs — the *values* are the concern.
 
