@@ -7,6 +7,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, System.Net.Http
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $MaxJobs = 4    # matches the Lambda's reserved concurrency
+$MaxBusy = 5    # 429s a file may get before it is marked failed
 
 function Fail($msg) {
     [void][Windows.Forms.MessageBox]::Show($msg, 'STL Tools', 'OK', 'Error')
@@ -76,7 +77,7 @@ function Add-Job($op, $opts, $src, $dst) {
     [void]$list.Items.Add($item)
     [void]$Jobs.Add([pscustomobject]@{
         Op = $op.name; Options = $opts; Src = $src; Dst = $dst; Step = 'queued'
-        Task = $null; Id = ''; Stream = $null; Item = $item; NotBefore = [datetime]::MinValue
+        Task = $null; Id = ''; Stream = $null; Item = $item; NotBefore = [datetime]::MinValue; Busy = 0
     })
 }
 
@@ -139,13 +140,14 @@ function Advance($j) {
 }
 
 # Advance, turning any error into a failed job. A 429 means every Lambda slot is busy
-# (another client, or a quit client's runs still finishing): requeue after a pause.
+# (another client, or a quit client's runs still finishing): requeue after a pause,
+# up to $MaxBusy times.
 function Try-Advance($j) {
     try { Advance $j }
     catch {
         if ($j.Stream) { $j.Stream.Dispose(); $j.Stream = $null }
         $j.Task = $null
-        if ("$_" -like 'HTTP 429*') {
+        if ("$_" -like 'HTTP 429*' -and ++$j.Busy -lt $MaxBusy) {
             $j.NotBefore = (Get-Date).AddSeconds(15)
             Set-Step $j 'queued' 'busy, retrying'
         }
@@ -227,7 +229,7 @@ $list.add_DoubleClick({
 
 $bottom = New-Object Windows.Forms.FlowLayoutPanel -Property @{ Dock = 'Bottom'; AutoSize = $true; WrapContents = $false }
 $bottom.Controls.Add((Btn 'Retry failed' {
-    foreach ($j in $Jobs) { if ($j.Step -eq 'failed') { Set-Step $j 'queued' '' } }
+    foreach ($j in $Jobs) { if ($j.Step -eq 'failed') { $j.Busy = 0; Set-Step $j 'queued' '' } }
 }))
 $bottom.Controls.Add((Btn 'Clear finished' {
     foreach ($j in @($Jobs)) {
