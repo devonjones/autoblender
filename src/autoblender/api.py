@@ -138,7 +138,7 @@ def handler(event, context):
 
 
 class _FakeS3:
-    """The four S3 calls api.py makes, in memory. A missing key raises like botocore."""
+    """The S3 calls api.py makes, in memory. A missing key raises like botocore."""
 
     def __init__(self, missing_code="404"):
         self.objs, self.missing_code = {}, missing_code
@@ -192,6 +192,8 @@ def _check_key():
         _cache.update(cache)
         if arn is None:
             os.environ.pop("API_KEY_SECRET_ARN")
+        else:
+            os.environ["API_KEY_SECRET_ARN"] = arn
 
 
 def _check_routes():

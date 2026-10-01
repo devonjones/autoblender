@@ -7,7 +7,7 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, System.Net.Http
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $MaxJobs = 4    # matches the Lambda's reserved concurrency
-$MaxBusy = 5    # 429s a file may get before it is marked failed
+$MaxBusy = 5    # a file is marked failed on its 5th 429
 
 function Fail($msg) {
     [void][Windows.Forms.MessageBox]::Show($msg, 'STL Tools', 'OK', 'Error')
@@ -140,8 +140,7 @@ function Advance($j) {
 }
 
 # Advance, turning any error into a failed job. A 429 means every Lambda slot is busy
-# (another client, or a quit client's runs still finishing): requeue after a pause,
-# up to $MaxBusy times.
+# (another client, or a quit client's runs still finishing): requeue after a pause.
 function Try-Advance($j) {
     try { Advance $j }
     catch {
