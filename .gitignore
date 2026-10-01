@@ -11,3 +11,5 @@ build/
 client_secret*.json
 creds*.json
 *.creds.json
+.env
+dist/

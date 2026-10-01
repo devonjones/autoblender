@@ -16,21 +16,13 @@ variable "image_tag" {
   type        = string
 }
 
-variable "drive_root_folder_id" {
-  description = "Google Drive folder id of the shared stl-automation root; <process>/in and /out live under it"
-  type        = string
-  validation {
-    condition     = length(var.drive_root_folder_id) > 0
-    error_message = "drive_root_folder_id must be set (repo variable DRIVE_ROOT_FOLDER_ID)."
-  }
-}
-
-variable "poll_interval_minutes" {
-  type    = number
-  default = 1
-}
-
 variable "memory_mb" {
   type    = number
   default = 4096
+}
+
+variable "api_concurrency" {
+  description = "Reserved concurrency of the API Lambda: the most jobs that run at once"
+  type        = number
+  default     = 4
 }

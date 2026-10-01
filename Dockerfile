@@ -16,13 +16,13 @@ COPY pyproject.toml ./
 COPY src/ src/
 RUN pip install --no-cache-dir .
 
-# Drive watcher for AWS Lambda: docker build --target lambda
+# STL tools API for AWS Lambda: docker build --target lambda
 FROM base AS lambda
 RUN pip install --no-cache-dir awslambdaric boto3
 ENV HOME=/tmp
 WORKDIR /tmp
 ENTRYPOINT ["python", "-m", "awslambdaric"]
-CMD ["autoblender.drive.handler"]
+CMD ["autoblender.api.handler"]
 
 # Default target: the `ab` CLI (bin/ab)
 FROM base AS cli

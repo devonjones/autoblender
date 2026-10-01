@@ -12,16 +12,42 @@ locals {
   image = "${data.terraform_remote_state.infra.outputs.ecr_repository_urls["autoblender"]}:${var.image_tag}"
 }
 
-# ─── Google OAuth credentials — value is written by bin/drive-auth ────────────
+# ─── API key — value is written by bin/package-stl-tools ─────────────────────
 
-resource "aws_secretsmanager_secret" "google_oauth" {
-  name = "${local.name}/google-oauth"
+resource "aws_secretsmanager_secret" "api_key" {
+  name = "${local.name}/api-key"
+}
+
+# ─── Job bucket: uploads in/, results out/, both reached only by presigned URL ─
+
+resource "aws_s3_bucket" "jobs" {
+  bucket = "${var.environment}-autoblender-jobs"
+}
+
+resource "aws_s3_bucket_public_access_block" "jobs" {
+  bucket                  = aws_s3_bucket.jobs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "jobs" {
+  bucket = aws_s3_bucket.jobs.id
+  rule {
+    id     = "expire-jobs"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 1
+    }
+  }
 }
 
 # ─── Lambda ──────────────────────────────────────────────────────────────────
 
-resource "aws_cloudwatch_log_group" "drive" {
-  name              = "/aws/lambda/${local.name}-drive"
+resource "aws_cloudwatch_log_group" "api" {
+  name              = "/aws/lambda/${local.name}-api"
   retention_in_days = 30
 }
 
@@ -35,41 +61,55 @@ data "aws_iam_policy_document" "lambda_assume" {
   }
 }
 
-resource "aws_iam_role" "drive" {
-  name                 = "${local.name}-drive"
+resource "aws_iam_role" "api" {
+  name                 = "${local.name}-api"
   assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
   permissions_boundary = data.terraform_remote_state.infra.outputs.deploy_permissions_boundary_arn
 }
 
-resource "aws_iam_role_policy_attachment" "drive_logs" {
-  role       = aws_iam_role.drive.name
+resource "aws_iam_role_policy_attachment" "api_logs" {
+  role       = aws_iam_role.api.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-data "aws_iam_policy_document" "drive_secret" {
+# Presigned URLs carry the role's own permissions, so PutObject on in/ is what
+# lets the client upload and GetObject on out/ is what lets it download.
+data "aws_iam_policy_document" "api" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.google_oauth.arn]
+    resources = [aws_secretsmanager_secret.api_key.arn]
+  }
+  statement {
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.jobs.arn}/*"]
+  }
+  statement {
+    # without ListBucket a missing key reads as 403, not the 404 api.py reports
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.jobs.arn]
   }
 }
 
-resource "aws_iam_role_policy" "drive_secret" {
-  name   = "google-oauth-read"
-  role   = aws_iam_role.drive.id
-  policy = data.aws_iam_policy_document.drive_secret.json
+resource "aws_iam_role_policy" "api" {
+  name   = "jobs-and-key"
+  role   = aws_iam_role.api.id
+  policy = data.aws_iam_policy_document.api.json
 }
 
-resource "aws_lambda_function" "drive" {
-  function_name = "${local.name}-drive"
-  role          = aws_iam_role.drive.arn
+resource "aws_lambda_function" "api" {
+  function_name = "${local.name}-api"
+  role          = aws_iam_role.api.arn
   package_type  = "Image"
   image_uri     = local.image
   memory_size   = var.memory_mb
   timeout       = 900
 
-  # One tick at a time: the watcher is idempotent but two overlapping ticks
-  # would process the same input twice.
-  reserved_concurrent_executions = 1
+  image_config {
+    command = ["autoblender.api.handler"]
+  }
+
+  # Caps the bill if the key leaks: at most this many cuts run at once.
+  reserved_concurrent_executions = var.api_concurrency
 
   ephemeral_storage {
     size = 2048
@@ -77,45 +117,39 @@ resource "aws_lambda_function" "drive" {
 
   environment {
     variables = {
-      DRIVE_ROOT_FOLDER_ID    = var.drive_root_folder_id
-      GOOGLE_OAUTH_SECRET_ARN = aws_secretsmanager_secret.google_oauth.arn
+      BUCKET             = aws_s3_bucket.jobs.id
+      API_KEY_SECRET_ARN = aws_secretsmanager_secret.api_key.arn
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.drive]
-}
-
-# EventBridge invokes asynchronously: without this, ticks throttled by the
-# concurrency limit queue for hours and replay back-to-back, and a crashing
-# handler is retried twice. A missed tick is just the next minute's tick.
-resource "aws_lambda_function_event_invoke_config" "drive" {
-  function_name                = aws_lambda_function.drive.function_name
-  maximum_event_age_in_seconds = 60
-  maximum_retry_attempts       = 0
-}
-
-# ─── Schedule ────────────────────────────────────────────────────────────────
-
-resource "aws_cloudwatch_event_rule" "tick" {
-  name                = "${local.name}-drive-tick"
-  schedule_expression = "rate(${var.poll_interval_minutes} ${var.poll_interval_minutes == 1 ? "minute" : "minutes"})"
-}
-
-resource "aws_cloudwatch_event_target" "tick" {
-  rule = aws_cloudwatch_event_rule.tick.name
-  arn  = aws_lambda_function.drive.arn
-
-  # Same reasoning as the invoke config: a tick EventBridge can't deliver now is
-  # superseded by the next one, never replayed later.
-  retry_policy {
-    maximum_event_age_in_seconds = 60
-    maximum_retry_attempts       = 0
+  logging_config {
+    log_format = "Text"
+    log_group  = aws_cloudwatch_log_group.api.name
   }
+
+  depends_on = [aws_iam_role_policy_attachment.api_logs]
 }
 
-resource "aws_lambda_permission" "tick" {
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.drive.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.tick.arn
+# ─── Function URL: public endpoint, the API key is checked in api.py ─────────
+
+resource "aws_lambda_function_url" "api" {
+  function_name      = aws_lambda_function.api.function_name
+  authorization_type = "NONE"
+}
+
+resource "aws_lambda_permission" "url" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.api.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+# Function URLs created since Oct 2025 also need InvokeFunction, scoped to URL calls.
+resource "aws_lambda_permission" "url_invoke" {
+  statement_id             = "FunctionURLInvokeAllowPublicAccess"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.api.function_name
+  principal                = "*"
+  invoked_via_function_url = true
 }

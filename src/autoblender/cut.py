@@ -9,8 +9,8 @@ import trimesh
 from .union import union_mesh, to_trimesh
 
 
-def cut_mesh(tm, z, keep="above"):
-    """Return (trimesh part on `keep` side of z, union report). The part is dropped to z=0."""
+def cut_mesh(tm, z, keep="above", drop=True):
+    """Return (trimesh part on `keep` side of z, union report). drop: move the part down to z=0."""
     man, report = union_mesh(tm)
     if keep == "above":
         part = man.trim_by_plane((0, 0, 1), z)
@@ -19,13 +19,14 @@ def cut_mesh(tm, z, keep="above"):
     if part.num_tri() == 0:
         raise RuntimeError(f"nothing left {keep} z={z}")
     out = to_trimesh(part)
-    out.apply_translation([0, 0, -out.bounds[0][2]])
+    if drop:
+        out.apply_translation([0, 0, -out.bounds[0][2]])
     return out, report
 
 
-def cut_stl(in_path, out_path, z, keep="above"):
+def cut_stl(in_path, out_path, z, keep="above", drop=True):
     tm = trimesh.load(in_path, force="mesh")
-    out, report = cut_mesh(tm, z, keep)
+    out, report = cut_mesh(tm, z, keep, drop)
     out.export(out_path)
     return report
 
@@ -38,6 +39,8 @@ def _selfcheck():
     bottom, _ = cut_mesh(box, 2.0, "below")
     assert abs(bottom.volume - 700) < 1e-6, bottom.volume
     assert abs(bottom.bounds[1][2] - 7) < 1e-6, bottom.bounds
+    kept, _ = cut_mesh(box, 2.0, "above", drop=False)
+    assert abs(kept.bounds[0][2] - 2) < 1e-6, kept.bounds
     try:
         cut_mesh(box, 50.0)
         raise AssertionError("expected empty cut to raise")

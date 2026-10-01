@@ -1,13 +1,14 @@
 name: Deploy
 
+# Same flow as openforge-catalog: feature PRs merge to `test` (→ staging); a release
+# PR from `test` to `main` deploys production.
 on:
   push:
-    branches: [main]        # → staging
-  workflow_dispatch:      # → staging from any branch
+    branches: [test, main]
 
-# ponytail: staging only; a production job needs its own state key, env and role
+# One run per branch at a time; a cancelled tofu apply leaves a held state lock.
 concurrency:
-  group: deploy-staging
+  group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -17,14 +18,14 @@ permissions:
 env:
   AWS_REGION: us-east-1
   TF_VERSION: "1.9.0"
+  ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
 
 jobs:
-  deploy-staging:
-    name: Deploy — staging
+  deploy:
+    name: Deploy — ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     env:
-      TF_STATE_BUCKET: openforge-infra-tfstate-682033461796
       ECR_REPO: autoblender
 
     steps:
@@ -33,9 +34,13 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN_STAGING }}
+          role-to-assume: ${{ github.ref_name == 'main' && secrets.AWS_ROLE_ARN_PRODUCTION || secrets.AWS_ROLE_ARN_STAGING }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: autoblender-deploy-staging
+          role-session-name: autoblender-deploy-${{ env.ENVIRONMENT }}
+
+      # openforge-infra names each account's state bucket after the account id.
+      - name: State bucket for this account
+        run: echo "TF_STATE_BUCKET=openforge-infra-tfstate-$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_ENV"
 
       - name: Login to ECR
         id: ecr
@@ -60,15 +65,14 @@ jobs:
       - name: tofu init
         working-directory: terraform
         run: |
-          tofu init -input=false \
+          tofu init -input=false -lockfile=readonly \
             -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
-            -backend-config="key=autoblender/staging/terraform.tfstate"
+            -backend-config="key=autoblender/${{ env.ENVIRONMENT }}/terraform.tfstate"
 
       - name: tofu apply
         working-directory: terraform
         env:
-          TF_VAR_environment: staging
+          TF_VAR_environment: ${{ env.ENVIRONMENT }}
           TF_VAR_infra_state_bucket: ${{ env.TF_STATE_BUCKET }}
           TF_VAR_image_tag: ${{ github.sha }}
-          TF_VAR_drive_root_folder_id: ${{ vars.DRIVE_ROOT_FOLDER_ID }}
         run: tofu apply -input=false -auto-approve
