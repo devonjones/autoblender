@@ -88,6 +88,7 @@ The defaults are the settings you approved (v05 in the session):
 | `--fit` | 1.05 | framing; below 1 crops the base |
 | `--top` | off | orthographic view straight down |
 | `--wall` / `--floor` / `--base` | see placement | x,y,z position of each part |
+| `--parts` | base,floor,wall | which parts to load; `base,floor` for a floor-only shot |
 | `--samples` / `--res` | 24 / 1000 | 24 is a preview; use 256 for the final render |
 
 ## Drybrush look (optional)
@@ -111,6 +112,17 @@ Test renders db01–db04 in the session; db04 is the keeper (db03 coverage with 
   top (6) plus slab (1.6), specific to this build.
 
 `--drybrush` defaults to 0, so the plain approved look is unchanged.
+
+## Guide card images
+
+The openforge-catalog guide cards use this script's drybrushed look: `--drybrush 1.5
+--light 0.55 --samples 256 --res 640`, then WebP at quality 85. The catalog session
+uploads them to R2 as `guides/guide.<key>.webp`.
+
+| card | parts | output |
+|---|---|---|
+| wall | the three parts above | `shots/wall-on-tile-drybrush-640.webp` |
+| floor | `dungeon_stone%block#floor.2x2.openforge.stl` as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
 
 ## Run it
 

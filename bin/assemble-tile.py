@@ -22,6 +22,7 @@ p.add_argument("out")
 p.add_argument("--wall", default="25.4,6.35,0")
 p.add_argument("--floor", default="0,0,6.0")
 p.add_argument("--base", default="0,0,0")
+p.add_argument("--parts", default="base,floor,wall", help="which of base,floor,wall to load, e.g. base,floor for a floor-only shot")
 p.add_argument("--yaw", type=float, default=28.0)
 p.add_argument("--pitch", type=float, default=24.0)
 p.add_argument("--top", action="store_true", help="orthographic straight-down view")
@@ -40,6 +41,9 @@ p.add_argument("--db-min-z", type=float, default=7.6, help="no drybrush below th
 p.add_argument("--fit", type=float, default=1.05, help="bounding-sphere framing; <1 crops")
 p.add_argument("--join", help="also write a manifold union of all three to this STL")
 a = p.parse_args(sys.argv[1:])
+a.parts = [n for n in a.parts.split(",") if n]
+if not a.parts or set(a.parts) - {"base", "floor", "wall"}:
+    p.error(f"--parts takes base, floor and/or wall; got {','.join(a.parts) or 'nothing'}")
 vec = lambda s: Vector(tuple(float(v) for v in s.split(",")))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -158,9 +162,11 @@ def stone(name, brush=True):
 spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.pi, 4, "Z")
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
-for name, off, mat in (("base", a.base, stone("base", brush=False)),
-                       ("floor", a.floor, stone("floor")),
-                       ("wall", a.wall, stone("wall"))):
+for name, off, brush in (("base", a.base, False), ("floor", a.floor, True),
+                         ("wall", a.wall, True)):
+    if name not in a.parts:
+        continue
+    mat = stone(name, brush=brush)
     o = import_stl(f"{name}.stl")
     o.name = name
     o.matrix_world = spin @ Matrix.Translation(vec(off))
