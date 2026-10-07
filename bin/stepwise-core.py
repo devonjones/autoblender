@@ -25,7 +25,7 @@ import trimesh
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 from autoblender.union import MIN_TRIS, MIN_VOL, repair_shell, shells, to_trimesh  # noqa: E402
 
-FIN_MM3 = 1.0   # same floor as qc-updates.py
+FIN_MM3 = 0.01  # same floor as qc-updates.py; real parts go down to ~0.9mm3
 
 
 def roundtrip(man):
@@ -49,10 +49,35 @@ def voids(m):
 
 def main(src, dst):
     tm = trimesh.load(src, force="mesh")
+    groups = [fi for fi in shells(tm.faces) if len(fi) >= MIN_TRIS]
+
+    # A body with an internal sheet glued along a seam splits into open halves
+    # (shells() only joins across 2-face edges).  Fan-filling each half makes two
+    # bogus solids; instead pair open shells that close each other.  Leftover
+    # open shells (the sheets themselves) fall through to repair_shell; their fan
+    # fill is ~0.02mm3, above FIN_MM3, and the internal-shell check below is what
+    # drops them.  Seen on every nova_trail column export.
+    # ponytail: O(n^2) over open shells and pairs only two at a time -- a shell
+    # that absorbs one partner can't take a third; grow groups transitively if a
+    # body ever splits into 3+ open pieces.
+    def closed(idx):
+        s = tm.submesh([idx], append=True, repair=False)
+        s.merge_vertices()
+        return s.is_watertight and s.volume > MIN_VOL
+    open_ = [k for k, fi in enumerate(groups) if not closed(fi)]
+    paired, absorbed = set(), set()
+    for a in open_:
+        for b in open_:
+            if a < b and a not in paired and b not in paired \
+                    and closed(np.concatenate([groups[a], groups[b]])):
+                print(f"shells {a}+{b}: open halves that close each other -- joined")
+                groups[a] = np.concatenate([groups[a], groups[b]])
+                paired |= {a, b}
+                absorbed.add(b)
+    groups = [fi for k, fi in enumerate(groups) if k not in absorbed]
+
     parts = []
-    for i, fi in enumerate(shells(tm.faces)):
-        if len(fi) < MIN_TRIS:
-            continue
+    for i, fi in enumerate(groups):
         sub = tm.submesh([fi], append=True, repair=False)
         man, rung = repair_shell(sub)
         if man is None:
