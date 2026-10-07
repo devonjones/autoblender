@@ -49,8 +49,8 @@ def build(ng_name, peg):
     ng.links.new(oi.outputs["Geometry"], mesh_in)
     ng.links.new(bl.outputs["Mesh"], go.inputs[0])
 
-    for n, x in ((gi, -400), (oi, -400), (bl, -150), (go, 50)):
-        n.location = (x, 100 if n is gi else -100 if n is oi else 0)
+    for n, xy in ((gi, (-400, 100)), (oi, (-400, -100)), (bl, (-150, 0)), (go, (50, 0))):
+        n.location = xy
 
     # A node group with no user is dropped on save, and the libraries are
     # authored as assets -- do both, or it silently will not be there.

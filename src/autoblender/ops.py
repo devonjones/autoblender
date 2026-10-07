@@ -661,12 +661,28 @@ def _selfcheck():
         f"mesh data did not move by the nudge: {before_z} -> {after_z}"
 
     # --- solver plumbing ----------------------------------------------------
-    # boolean() must use the solver it is given, not a hardcoded one
-    other = bpy.data.objects.new("other", mesh.copy())
-    for solver in ("EXACT", "FLOAT", "MANIFOLD"):
-        mod = _boolean_modifier(obj, other, "UNION", solver)
-        assert mod.solver == solver, (solver, mod.solver)
-        obj.modifiers.remove(mod)
+    # boolean() must apply the solver it is given, not a hardcoded one
+    global _boolean_modifier
+    real, seen = _boolean_modifier, []
+
+    def recording(*args):
+        mod = real(*args)
+        seen.append(mod.solver)
+        return mod
+    _boolean_modifier = recording
+    try:
+        for solver in ("EXACT", "FLOAT", "MANIFOLD"):
+            bpy.ops.mesh.primitive_cube_add(size=2)
+            a = bpy.context.active_object
+            bpy.ops.mesh.primitive_cube_add(size=2, location=(1, 0, 0))
+            b = bpy.context.active_object
+            boolean(a, b, "UNION", solver)
+            assert seen[-1] == solver, (solver, seen)
+            assert not a.modifiers, "boolean() left its modifier unapplied"
+            drop(b)
+            drop(a)
+    finally:
+        _boolean_modifier = real
 
     # apply_geometry_nodes(solver=...) reaches the group's booleans, and says so
     # loudly when there are none to reach
