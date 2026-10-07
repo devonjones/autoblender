@@ -255,7 +255,36 @@ def nonmanifold(obj):
     return n
 
 
+def demo():
+    """`AB_ENTRYPOINT=python bin/ab bin/make-ports.py --demo` (pure logic only).
+
+    The geometry probes need bpy and a library, so they are exercised by running
+    the tool; what is checked here is the pure string logic that silently
+    mis-pairs cutters when it drifts.
+    """
+    # style words win wherever they appear
+    assert style_of("Negative-Q-Side.Openlock.Low.A") == "openlock"
+    assert style_of("Side.Negative-A.Openlock.A") == "openlock"
+    assert style_of("Negative-A-Side.Dragonbite.Mid.B") == "dragonbite"
+    assert style_of("Negative-BA-Side.Filament.A") == "filament"
+    assert style_of("Negative-A.Infinitylock.Magnetic.1S") == "infinitylock"
+    # a side cutter with no style word defaults to openlock -- the spellings
+    # predate the rename pass and some carry no style at all
+    assert style_of("Side.Negative-IA.A") == "openlock"
+    assert style_of("Negative-Q-Side.A") == "openlock"
+    # but a BASE negative must not be swept in as an openlock SIDE cutter.
+    # The old fallback returned "openlock" for any unmatched name, which
+    # classified 44 of these across the five libraries.
+    for base in ("Negative-A.triplex", "Negative-A.Flex Magnetic",
+                 "Negative-BA-Dragonlock", "DragonLock.Negative.A",
+                 "Negative-D.Magnetic+Flex", "Negative-BA.Triplex Unsupported"):
+        assert style_of(base) is None, base
+    print("make-ports demo ok")
+
+
 def main():
+    if "--demo" in sys.argv:
+        return demo()
     ap = argparse.ArgumentParser()
     ap.add_argument("--library", required=True)
     ap.add_argument("--piece", required=True)
@@ -347,7 +376,12 @@ def main():
             bpy.context.scene.collection.objects.link(cp)
             boolean(cp, blocks[p], "UNION")
             got, nm = face_verts(cp, blocks[p]), nonmanifold(cp)
+            # remove the datablock too, not just the object: a 200-400k-tri
+            # mesh copy per port (x4, x8 cores) otherwise lingers as an orphan
+            # for the rest of the session
+            mesh = cp.data
             bpy.data.objects.remove(cp, do_unlink=True)
+            bpy.data.meshes.remove(mesh)
             print(f"# {p:16s} {proud:+7.3f}mm vs plane   face verts "
                   f"{own:3d} -> {got:4d} ({got - own:+4d})   "
                   f"non-manifold edges {base_nm} -> {nm} ({nm - base_nm:+d})")

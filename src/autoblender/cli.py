@@ -1,5 +1,6 @@
 import argparse
 import os
+import traceback
 import sys
 
 from . import out
@@ -500,7 +501,13 @@ def main():
     try:
         args.fn(args)
     except Exception as e:
-        print(f"ab: error: {e}", file=sys.stderr)
+        # Keep the one-line summary the batch drivers scrape, but do not throw
+        # the traceback away: apply-gaps and build-cores report only the last
+        # stderr line, so without this a failure deep in bpy was unattributable.
+        # AB_TRACE=0 restores the terse form.
+        print(f"ab: error: {type(e).__name__}: {e}", file=sys.stderr)
+        if os.environ.get("AB_TRACE", "1") != "0":
+            traceback.print_exc()
         sys.exit(1)
 
 

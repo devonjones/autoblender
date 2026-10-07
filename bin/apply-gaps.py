@@ -54,7 +54,33 @@ def wanted(row, texture, option, exact=False):
             and (option is None or option in row["missing_option"]))
 
 
+def demo():
+    """Self-check the row filter: `bin/apply-gaps.py --demo`."""
+    base = {"texture": "t", "has_core": "yes", "likely_deliberate": "no",
+            "node_group": "OpenLock", "status": "", "missing_option": "openlock+unsupported"}
+    r = dict(base)
+    # the distinction --exact exists for: a substring match on
+    # "openlock+unsupported" also catches "openlock+unsupported,side", which is
+    # the difference between a row needing no ports and one waiting on a sculpt
+    assert wanted(r, "t", "openlock+unsupported", exact=True)
+    assert wanted(r, "t", "openlock+unsupported", exact=False)
+    side = dict(base, missing_option="openlock+unsupported,side")
+    assert not wanted(side, "t", "openlock+unsupported", exact=True)
+    assert wanted(side, "t", "openlock+unsupported", exact=False)
+    # no filter at all takes both
+    assert wanted(r, "t", None) and wanted(side, "t", None)
+    # every exclusion still applies under --exact
+    for field, bad in (("texture", "other"), ("has_core", "no"),
+                       ("likely_deliberate", "yes"), ("node_group", ""),
+                       ("status", "REVIEWED: ok")):
+        assert not wanted(dict(r, **{field: bad}), "t", "openlock+unsupported",
+                          exact=True), field
+    print("apply-gaps demo ok")
+
+
 def main():
+    if "--demo" in sys.argv:
+        return demo()
     ap = argparse.ArgumentParser()
     ap.add_argument("texture")
     ap.add_argument("--option", help="only rows whose option contains this")

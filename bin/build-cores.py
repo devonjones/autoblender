@@ -26,7 +26,57 @@ LIB = f"{DEV}/generic/separate_wall/library"
 TIMEOUT = 1800
 
 
+def family_matches(row_family, want):
+    """Does a queue row's family column match the --family argument?
+
+    A bare name matches the last segment; a path matches as a suffix.  Note the
+    caller MUST also filter on texture: `family` is `<texture>/<sub...>`, so a
+    suffix like "/primary_walls/boss_door" matches every texture that has one.
+    """
+    if "/" in want:
+        return row_family.endswith("/" + want)
+    return row_family.split("/")[-1] == want
+
+
+def tile_key(variant):
+    """(key to look the openforge tile up under, whether to flip it).
+
+    A '+reverse' variant ships no openforge tile of its own -- it only appears
+    under openlock/, where the locks are already cut, so that file is not a core
+    source.  It does not need one: the tile is asymmetric along its length, and
+    reverse is the same part offered the other way round, so it builds from the
+    plain sibling's tile turned end-for-end.
+    """
+    flip = "+reverse" in variant
+    return (variant.replace("+reverse", "") if flip else variant), flip
+
+
+def demo():
+    """`bin/build-cores.py --demo`."""
+    assert family_matches("dungeon_stone/separate_wall/primary_walls/boss_door",
+                          "separate_wall/primary_walls/boss_door")
+    assert family_matches("dungeon_stone/separate_wall/primary_walls/boss_door",
+                          "boss_door")
+    assert not family_matches("dungeon_stone/separate_wall/curved_walls/boss_door",
+                              "separate_wall/primary_walls/boss_door")
+    # the trap: a suffix match alone spans textures, so the caller filters on
+    # texture too.  This marked 16 cut-stone rows reviewed once.
+    assert family_matches("cut-stone/separate_wall/primary_walls/boss_door",
+                          "separate_wall/primary_walls/boss_door")
+
+    assert tile_key("t%block#wall,door+sliding+slot.2x.A") == \
+        ("t%block#wall,door+sliding+slot.2x.A", False)
+    assert tile_key("t%block#wall,boss_door+dungeon_door+reverse.Q") == \
+        ("t%block#wall,boss_door+dungeon_door.Q", True)
+    # +reverse anywhere in the name, not only at the end
+    assert tile_key("t%block#wall,boss_door+dungeon_door+skull+reverse.Q") == \
+        ("t%block#wall,boss_door+dungeon_door+skull.Q", True)
+    print("build-cores demo ok")
+
+
 def main():
+    if "--demo" in sys.argv:
+        return demo()
     ap = argparse.ArgumentParser()
     ap.add_argument("texture")
     ap.add_argument("family", help="family path or its last segment; a bare name like "
@@ -42,8 +92,7 @@ def main():
     with open(os.path.join(REPO, "docs", "option-gaps.tsv"), newline="") as fh:
         rows = [r for r in csv.DictReader(fh, delimiter="\t")
                 if r["texture"] == a.texture and not r["status"]
-                and (r["family"].endswith("/" + a.family)
-                     if "/" in a.family else r["family"].split("/")[-1] == a.family)]
+                and family_matches(r["family"], a.family)]
     if not rows:
         raise SystemExit(f"no outstanding rows for {a.texture}/{a.family}")
 
@@ -67,13 +116,8 @@ def main():
     out_dir = os.path.join(DEV, a.texture, "peripherals", a.family.split("/")[-1])
     ok = missing = skipped = 0
     for fam, v in need:
-        # A '+reverse' variant ships no openforge tile of its own -- it only
-        # appears under openlock/, where the locks are already cut, so it is not
-        # a core source.  It does not need one: the tile is asymmetric along its
-        # length, and reverse is that same part offered the other way round, so
-        # it builds from the plain sibling's tile turned end-for-end.
-        flip = "+reverse" in v
-        tile = tiles.get(fam, {}).get(v.replace("+reverse", "") if flip else v)
+        key, flip = tile_key(v)
+        tile = tiles.get(fam, {}).get(key)
         if not tile:
             print(f"NO TILE  {v}", file=sys.stderr)
             missing += 1

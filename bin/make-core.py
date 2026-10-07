@@ -121,7 +121,10 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     base = find_base(a.library, a.texture)
     bpy.ops.wm.stl_import(filepath=a.tile)
-    tile = next(o for o in bpy.data.objects if o.type == "MESH" and o.name != base.name)
+    tile = next((o for o in bpy.data.objects
+                 if o.type == "MESH" and o.name != base.name), None)
+    if tile is None:
+        raise SystemExit(f"no mesh imported from {a.tile} -- empty or unreadable STL")
     bpy.context.view_layer.update()
 
     blo, bhi = bounds(base)

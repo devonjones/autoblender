@@ -262,10 +262,24 @@ def prior_status(path):
 
 def prior_seeded(path):
     """Rows bin/seed-gaps.py wrote.  They come from dev cores, not the release
-    tree, so the survey cannot regenerate them -- carry them over verbatim."""
+    tree, so the survey cannot regenerate them -- carry them over verbatim.
+
+    Re-ordered through COLUMNS rather than taken as `list(r.values())`, which
+    follows whatever order the file on disk happens to have.  These rows are the
+    one part of the queue that cannot be rebuilt from the tree, so a header that
+    had drifted would scramble exactly the data with no other source.  A file
+    whose header does not match COLUMNS is refused rather than silently
+    reinterpreted.
+    """
     try:
         with open(path, newline="") as fh:
-            return [list(r.values()) for r in csv.DictReader(fh, delimiter="\t")
+            rd = csv.DictReader(fh, delimiter="\t")
+            if rd.fieldnames and tuple(rd.fieldnames) != tuple(COLUMNS):
+                raise SystemExit(
+                    f"{path}: header does not match COLUMNS; refusing to carry "
+                    f"seeded rows over.\n  on disk: {rd.fieldnames}\n  expected: "
+                    f"{list(COLUMNS)}")
+            return [[r[c] for c in COLUMNS] for r in rd
                     if r["gap_class"] == "seeded"]
     except FileNotFoundError:
         return []

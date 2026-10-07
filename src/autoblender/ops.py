@@ -1,6 +1,8 @@
 import os
 import re
 
+import sys
+
 import bpy
 from mathutils import Vector
 
@@ -116,7 +118,16 @@ def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None, solver=N
 
     if solver:
         n = _set_boolean_solver(ng, solver)
-        print(f"# gn: boolean solver -> {solver} on {n} node(s)")
+        if n == 0:
+            # the caller asked for a solver and got none of it: the group would
+            # run on whatever the library shipped (historically EXACT, which
+            # collapsed wall.D to a 162-poly sliver).  Too quiet to be an info
+            # line.
+            print(f"# gn: WARNING --solver {solver} matched no Mesh Boolean node in "
+                  f"{node_group_name!r}; the library's own solver is in effect",
+                  file=sys.stderr)
+        else:
+            print(f"# gn: boolean solver -> {solver} on {n} node(s)")
 
     if nudge_z:
         # The OpenForge cut plane sits at the base height.  Where the stone
@@ -629,7 +640,7 @@ def _selfcheck():
     # The whole point: a geometry nodes modifier evaluates in the object's LOCAL
     # space, so nudging obj.location is a silent no-op that still prints its
     # success line.  Assert the vertices moved and the transform did not.
-    passthrough = tree("passthrough")
+    tree("passthrough")          # looked up by name below
     mesh = bpy.data.meshes.new("m")
     mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
     mesh.update()

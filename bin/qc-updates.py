@@ -42,6 +42,11 @@ def sibling_key(fn):
     'x#wall.A.openlock+unsupported,pegs.stl' -> ('x#wall.A', 'pegs',
     'openlock+unsupported,pegs')
     """
+    if "." not in fn[:-4]:
+        # no option component: not a generated variant, so it has no sibling.
+        # Raising here aborted the whole report AFTER every file had loaded and
+        # after --fix had already rewritten some of them.
+        return fn[:-4], "", ""
     stem, opt = fn[:-4].rsplit(".", 1)
     rest = [t for t in opt.split(",") if t.split("+")[0] != "openlock"]
     return stem, ",".join(rest), opt

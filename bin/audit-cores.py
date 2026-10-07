@@ -35,7 +35,10 @@ for r in rows:
     try:
         c, s = trimesh.load(core, force="mesh"), trimesh.load(ref, force="mesh")
     except Exception as e:
-        seen[core] = f"load error {e}"; verdict["load error"] += 1; continue
+        # str(e) is empty for several exception types, so name the class too --
+        # otherwise a defect in this script reads exactly like a bad STL
+        seen[core] = f"load error {type(e).__name__}: {e or '(no detail)'}"
+        verdict["load error"] += 1; continue
     dv = abs(c.volume - s.volume) / max(s.volume, 1e-9)
     dz = abs((c.bounds[1][2] - c.bounds[0][2]) - (s.bounds[1][2] - s.bounds[0][2]))
     if dv < 0.005 and dz < 0.05:
