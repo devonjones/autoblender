@@ -11,11 +11,17 @@ an openlock variant from it yields a wall missing its bottom 6mm.
 --mark writes a blocking status into docs/option-gaps.tsv for every row whose
 core fails, so the queue cannot hand that row out as actionable again.
 """
-import csv, os, sys, trimesh, collections
+import csv, importlib.util, os, sys, trimesh, collections
 
 R = "/home/devon/Dropbox/projects/Hardware/objects/OpenForge/tiles"
-rows = [r for r in csv.DictReader(open("/work/docs/option-gaps.tsv"), delimiter="\t")
-        if r["has_core"] == "yes"]
+TSV = "/work/docs/option-gaps.tsv"          # this script only runs in the container
+# share option-gaps.py's atomic writer rather than truncating the queue in place
+_spec = importlib.util.spec_from_file_location("og", "/work/bin/option-gaps.py")
+og = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(og)
+
+with open(TSV, newline="") as fh:
+    rows = [r for r in csv.DictReader(fh, delimiter="\t") if r["has_core"] == "yes"]
 seen, verdict = {}, collections.Counter()
 for r in rows:
     core = r["core_path"]
@@ -38,8 +44,8 @@ for r in rows:
         seen[core] = f"differs (vol {dv*100:.1f}%, h {dz:.2f}mm)"; verdict["looks like a real core"] += 1
 
 if "--mark" in sys.argv:
-    tsv = "/work/docs/option-gaps.tsv"
-    data = list(csv.reader(open(tsv, newline=""), delimiter="\t"))
+    with open(TSV, newline="") as fh:
+        data = list(csv.reader(fh, delimiter="\t"))
     hdr, body = data[0], data[1:]
     i = {k: n for n, k in enumerate(hdr)}
     n = 0
@@ -47,9 +53,7 @@ if "--mark" in sys.argv:
         if seen.get(r[i["core_path"]]) == "IS the openforge body" and not r[i["status"]]:
             r[i["status"]] = "blocked: core_path is the openforge body, not a core"
             n += 1
-    with open(tsv, "w", newline="") as fh:
-        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        w.writerow(hdr); w.writerows(body)
+    og.write_tsv(TSV, hdr, body)
     print(f"marked {n} rows blocked\n")
 
 for k, v in verdict.most_common():

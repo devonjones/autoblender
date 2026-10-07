@@ -15,11 +15,14 @@ them.
 """
 import argparse
 import csv
+import importlib.util
 import os
-import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TSV = os.path.join(REPO, "docs", "option-gaps.tsv")
+_spec = importlib.util.spec_from_file_location("og", f"{REPO}/bin/option-gaps.py")
+og = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(og)
 
 
 def main():
@@ -59,16 +62,20 @@ def main():
     for r in hits:
         print(f"   {os.path.basename(r[i['out_path']])}")
         if not a.dry:
-            os.unlink(r[i["out_path"]])
             r[i["status"]] = ""
 
     if a.dry:
         print(f"dry run: {len(hits)} would be reset")
         return
-    with open(TSV, "w", newline="") as fh:
-        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        w.writerow(hdr)
-        w.writerows(body)
+    # Clear the statuses FIRST, then delete.  The old order unlinked the files
+    # before persisting, so a failure mid-loop left status="" rows pointing at
+    # files that no longer existed -- and apply-gaps skips any row whose output
+    # is missing only after checking status, so those rows were stranded.
+    og.write_tsv(TSV, hdr, body)
+    for r in hits:
+        out = r[i["out_path"]]
+        if os.path.exists(out):
+            os.unlink(out)
     print(f"reset {len(hits)} rows -- run apply-gaps to rebuild")
 
 

@@ -79,7 +79,11 @@ Three tiers, strongest first:
 
 ## 3. Tools (`bin/`)
 
-All run in the bpy container. `bin/ab` is the docker shim; **`AB_ENTRYPOINT=python bin/ab
+**Not all of these run in the bpy container.** `option-gaps.py`, `apply-gaps.py`,
+`build-cores.py`, `reset-for-core.py` and `seed-gaps.py` are plain stdlib Python that run
+on the host and shell *out* to `bin/ab`; `make-core.py`, `make-ports.py`,
+`make-pegs-group.py` and `assemble-tile.py` need bpy and run inside it; `qc-updates.py`
+and `stepwise-core.py` need trimesh but not bpy. `bin/ab` is the docker shim; **`AB_ENTRYPOINT=python bin/ab
 <script.py>`** runs a bpy script with the right mounts (`/home`, `/mnt`, `$PWD` → `/work`).
 
 | tool | what it does |
@@ -222,10 +226,33 @@ both heights; the probe decides per piece.** No flag.
   rather than its depth, and ranks ports wrong — on a boss_door core one port read
   0.02mm³ while standing 0.054mm proud, and another read 0.03mm³ at only 0.042mm proud.
   A 0.33mm³ reading looked borderline as a number and was obviously wrong on screen.
-  `make-ports.py` now gates on `PROUD_MAX = 0.01mm`, which is a **float-noise floor, not
-  a tolerance**: sculpted-clean ports measure 0.000–0.002mm, and the smallest real defect
-  seen was 0.042mm. The probe also prints the y/z of the worst point so the spot can be
-  found in Blender directly.
+  `make-ports.py` gates on `PROUD_MAX = -0.01mm` — **negative on purpose**: the texture
+  must sit *behind* the plane, not merely flush. The probe box reaches `BEHIND = 2.0mm`
+  inside the plane as well as `OUTSET` past it, because a box starting at the plane comes
+  back empty when nothing protrudes and so cannot tell "flush" from "recessed 0.5mm".
+  (`BEHIND`, **not** `INSET` — that name is already taken by the fill probe at `25.4/8`,
+  and reusing it silently changes every fill reading.) The probe also prints the y/z of
+  the worst point so the spot can be found in Blender directly.
+
+#### Measured, not assumed: what protrusion actually does
+
+`make-ports.py --face-check` unions each port block on its own and reports what the
+boolean did to the block's mating face. On boss_door cores, 2026-09-22:
+
+```
+proud        face verts       non-manifold edges
+-0.039       4 ->   4  (+0)   0 -> 0
+-0.004       4 ->   4  (+0)   0 -> 0
++0.002       4 ->  12  (+8)   0 -> 0
++0.004       4 ->   9  (+5)   0 -> 0
++0.046       4 ->  61 (+57)   0 -> 0
+```
+
+**It flips exactly at zero.** Two microns proud fragments the face into 8 extra vertices;
+four microns of clearance is clean. Non-manifold edges never appeared, so the cost of a
+flush core is a fragmented mating face, not an invalid mesh. The empirical requirement is
+`proud < 0`; `-0.01` is **margin, not requirement**, because the measurement's own noise
+is ~0.004mm.
 
 A red port gets **neither block nor cut** — an unused block leaves a pointless flat pad.
 
@@ -466,6 +493,19 @@ already lacked supports. **That was wrong** — the 2887mm3 gap between the `%bl
 
 ## 6b. nova_trail walls: first unreleased texture (started 2026-09-22)
 
+**Released 2026-09-30.** All 235 wall rows were REVIEWED/accepted, and floors, s2w floors and
+columns were confirmed. openforge-renamer moved everything from `nova_trail/updates/` into
+`OpenForge/tiles/nova_trail/` (same relative paths; names checked against its conventions,
+`side,pegs` ruling included). The seeded queue rows keep their now-stale `updates/`
+`out_path` as history.
+Same day, Devon had the 12 decoration walls (bypass, conference_room, console, dedication,
+engineering, environmental_controls, fancy, monitor, pipe_access, pipe_access2, replicator,
+tube) moved into one release folder, `separate_wall/primary_walls/wall+decorations/`
+(filenames unchanged). `wall`, `wall+door`, `wall+window`, `wall+swappable` stay separate.
+**Pulled from the Sept release (2026-09-30):** `wall+decorations`, `wall+swappable` and
+`wall+window` moved back to `nova_trail/updates/separate_wall/primary_walls/` to ship next
+month. The release tree keeps only `column`, `wall`, `wall+door`.
+
 nova_trail has **no separate walls in the release tree**, so `option-gaps.py` proposes
 nothing for it. `bin/seed-gaps.py <texture> <dev-folder>` writes rows for every
 `<tex>#<piece>.<size>.<L>.core.stl` in the folder, using dungeon_stone `wall`'s option
@@ -505,6 +545,35 @@ a feature void. **Devon's call (2026-09-22): the walls are thin — build anythi
 and he deletes the ones that don't work.** So the 100% rule does not apply to nova_trail:
 everything >=90% was built through the node group as usual (no trim; the flush end faces
 are CSG, not texture). Only `wall+swappable` (Mid 78%) was accepted as impossible.
+
+### Floors (confirmed by Devon 2026-09-29; not in the queue)
+
+`basics/floors/nova_trail#floor.<size>.<L>.core.stl` -> `updates/floors/floor/{openforge,
+openlock,openlock+unsupported}/nova_trail#floor.<size>.<opt>.stl` (size in the name, not
+the letter, as dungeon_stone ships). openforge = core trimmed at z=6, left at z=6.
+openlock / unsupported = core minus `Negative-<L>.Triplex` / `...+Supportless` from
+`generic/openlock_base/base_negatives.blend`, done in manifold3d (some cutters are
+multi-shell; union them first). Unsupported reads -0.8 to -2.7% vs openlock on floors.
+
+- **Strips are not shipped**, except the 2x strip, which is the **AS floor**
+  (`floor.AS`). `Negative-AS` is only x+/-19.7 on a +/-25.4 tile -- deliberate: its base
+  matched dungeon_stone's shipped `floor.AS.openlock` below z=6 to 0.1%.
+- `s2w.floor.*` cores are already the part above the base, so they are filed as
+  `s2w/{wall,corner}/floor#{wall,corner}+s2w/nova_trail#floor+s2w+<kind>.<size>.openforge.stl`.
+  `s2w.floor.corner.4x4` (2 bodies) was not filed; `wall.4x2` fails manifold3d.
+
+### Columns (2026-09-29)
+
+`library.columns.blend`: `Column-L` (OpenLock + DragonBite, with port blocks) and
+`Column-Corner` (OpenLock, DragonBite, Filament, no port blocks) both cut the L on **+x and
++y**, and output the input plus one copy per style joined, offset +15/+30/+45 in x
+(`Column-L` also +15 in y) -- split by x after applying. The nova columns had their flat
+sides at -x/+y and were rotated 90 deg clockwise (shells and cores, `*.pre-rotate.stl`).
+**Separate-wall column: OpenLock + DragonLock only (no filament). s2w corner column:
+OpenLock, DragonLock and Filament** (Devon, 2026-09-29) -- same as dungeon_stone ships.
+The columns library is still EXACT: expect zero-volume fins and small open holes; drop the
+fins and run `ab core` on each output. Their shells contain internal sheets that split the body; build the core from the pairs
+of open shells that close each other and drop the sheets.
 
 ### Corners go through `Corner.Right` here
 
@@ -553,6 +622,28 @@ trimmed at x=19.05 (0.68mm3), original in `*.corner.core.pre-trim.stl`.
   equivalent after all and those 12 rows want a rebuild at the default.
   There is no way to tell which cores were hand-dropped except by asking, so a core built
   by `make-core.py` still needs the default nudge.
+- **Four `main()` functions are over the C901 floor**, deferred from PR #3's review by
+  Devon on 2026-10-07 ("defer with tickets"). `AGENT-REVIEWERS.md` says
+  `ruff check --select C901 --max-complexity 10 .` must pass on every PR, but no CI
+  enforces it — `.github/workflows/deploy.yml` is the only workflow and has no lint step,
+  and there is no ruff config in the repo. Measured on the PR head:
+
+  | file | `main()` C901 | compounding smell |
+  |---|---|---|
+  | `build-cores.py` | 18 | nesting depth 4 |
+  | `apply-gaps.py` | 17 | nesting depth 4, twice |
+  | `make-ports.py` | 16 | three workflows in one function (trim / face-check / probe-and-cut) |
+  | `option-gaps.py` | 16 | nesting depth 6 |
+
+  Also `ops.py:apply_geometry_nodes` now takes 6 parameters (was 4; this PR added
+  `solver` and `nudge_z`), crossing the >5 threshold.
+
+  Not filed in beads: `bd` is installed but this repo has no database, and `bd init` is a
+  repo-level decision. Recorded here instead, which is where this workstream's other
+  deferrals live. The risk in doing them is that these four are exercised across seven
+  completed tile families and there are no tests that would catch a refactor regression —
+  `make-ports.py` in particular would want splitting by workflow first.
+
 - **s2w corners**: no known library or process. One dungeon_stone row blocked on it.
 - **Columns** are invisible to the survey — their files use a bare `side` connection that
   isn't in the folder vocabulary. Either rename them or teach the survey to read the folder

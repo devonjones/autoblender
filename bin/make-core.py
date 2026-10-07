@@ -92,6 +92,12 @@ def find_base(blend, texture):
 
 
 def main():
+    # `--demo` is a self-check and takes no inputs, but the four required
+    # arguments below made argparse exit 2 before the branch could run -- the
+    # documented invocation only worked if you also passed four dummy paths.
+    if "--demo" in sys.argv:
+        return demo()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--library", required=True)
     ap.add_argument("--texture", required=True, help='e.g. "Dungeon Stone"')
@@ -121,10 +127,11 @@ def main():
     blo, bhi = bounds(base)
 
     if a.flip:
-        # Rotate about the BASE's XY centre, not the tile's own: X is never
-        # corrected further down (only Y and Z are), so pivoting on the base is
-        # what keeps the flipped tile sitting square on it.  Z is untouched by a
-        # Z-rotation, so the lift below still reads the right value.
+        # Rotate about the BASE's XY centre, not the tile's own, so the flipped
+        # tile lands square on it.  Z is untouched by a Z-rotation, so the lift
+        # below still reads the right value.  (This comment used to claim X is
+        # never corrected downstream; that stopped being true when step 2's
+        # squaring was added, which corrects both X and Y.)
         tile.data.transform(flip_matrix((blo[0] + bhi[0]) / 2, (blo[1] + bhi[1]) / 2))
         tile.data.update()
         bpy.context.view_layer.update()
@@ -195,14 +202,14 @@ def main():
     # box: between z=1 and z=5 it is undercut to y=[-0.250, 6.522] while its
     # footprint is y=[-6.350, 6.522].  Measuring that band put its "centre" at
     # +3.136 and reported a perfectly square tile as 1.85-2.25mm out.
-    final_c = band_centre(tile, cut + 2.0, cut + 6.0)
+    final_c = band_centre(tile, bhi[2] + 2.0, bhi[2] + 6.0)
     if final_c:
         dx = (blo[0] + bhi[0]) / 2 - final_c[0]
         dy = (blo[1] + bhi[1]) / 2 - final_c[1]
         flag = "  <-- CHECK: tile is not square on its base" if max(abs(dx), abs(dy)) > 0.1 else ""
         print(f"# base-vs-wall dx={dx:+.3f} dy={dy:+.3f}{flag}")
 
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     bpy.ops.object.select_all(action="DESELECT")
     tile.select_set(True)
     bpy.context.view_layer.objects.active = tile

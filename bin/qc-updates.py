@@ -13,7 +13,7 @@ come out LARGER than its shipped sibling (door+rectangular narrow.IA reads
 number, build the SUPPORTED version from the same core and compare that to
 shipped -- it separates a core that differs from a node group misbehaving.
 
---fix drops zero-volume bodies (< FIN_MM3) and rewrites the file.  These are
+--fix drops zero-volume bodies (<= FIN_MM3) and rewrites the file.  These are
 float32 slivers: manifold3d's output is clean, but writing STL at float32 folds
 a few near-coincident triangles into fins that hang off the real body on shared
 edges.  They carry no volume, but they break watertightness and the next
@@ -26,7 +26,7 @@ import re
 import numpy as np
 import trimesh
 
-FIN_MM3 = 1.0
+FIN_MM3 = 0.01   # fins are ~0; real details go down to ~0.9mm3 (environmental_controls)
 
 
 def stats(m):
@@ -35,7 +35,13 @@ def stats(m):
 
 
 def sibling_key(fn):
-    """'x#wall.A.openlock+unsupported,pegs.stl' -> ('x#wall.A', 'pegs')"""
+    """Split a filename into the parts needed to find its openlock sibling.
+
+    -> (stem, non-openlock option tags, the full option string).  Three values,
+    not the two an earlier version of this docstring claimed:
+    'x#wall.A.openlock+unsupported,pegs.stl' -> ('x#wall.A', 'pegs',
+    'openlock+unsupported,pegs')
+    """
     stem, opt = fn[:-4].rsplit(".", 1)
     rest = [t for t in opt.split(",") if t.split("+")[0] != "openlock"]
     return stem, ",".join(rest), opt

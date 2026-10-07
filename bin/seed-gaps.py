@@ -60,9 +60,16 @@ def rows_for(texture, folder):
             option = og.canon(raw)
             group, args = og.mapping_for(option, family, variant)
             out = "/".join((og.DEV, texture, "updates", "separate_wall", "primary_walls",
-                            piece, *chain, f"{variant}.{option}.stl"))
-            yield [texture, family, variant, option, "seeded", "no", "yes",
-                   os.path.join(folder, fn), group, args, out, ""]
+                            piece, *chain, f"{variant}.{og.spell(option)}.stl"))
+            row = {"texture": texture, "family": family, "variant": variant,
+                   "missing_option": option, "gap_class": "seeded",
+                   "likely_deliberate": "no", "has_core": "yes",
+                   "core_path": os.path.join(folder, fn), "node_group": group,
+                   "set_args": args, "out_path": out, "status": ""}
+            # keyed, then ordered by the one definition in option-gaps.py --
+            # this used to be a bare positional list duplicating that order
+            assert set(row) == set(og.COLUMNS), "row keys drifted from og.COLUMNS"
+            yield [row[c] for c in og.COLUMNS]
 
 
 def demo():
@@ -83,14 +90,16 @@ def main():
 
     with open(og.OUT, newline="") as fh:
         rd = csv.reader(fh, delimiter="\t")
-        header = next(rd)
-        have = {tuple(r[:4]) for r in rd}
+        next(rd)                                  # header, rewritten from og.COLUMNS
+        existing = list(rd)
+    have = {tuple(r[:4]) for r in existing}
     new = [r for r in rows_for(a.texture, a.folder) if tuple(r[:4]) not in have]
     for r in new:
         print(f"{r[8]:22s} {r[10].split('/updates/')[-1]}")
     if not a.dry and new:
-        with open(og.OUT, "a", newline="") as fh:
-            csv.writer(fh, delimiter="\t", lineterminator="\n").writerows(new)
+        # rewrite atomically rather than appending: a partial append leaves a
+        # torn final row in the one file whose `status` column is unrecoverable
+        og.write_tsv(og.OUT, og.COLUMNS, existing + new)
     print(f"{'would add' if a.dry else 'added'} {len(new)} rows")
 
 

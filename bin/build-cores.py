@@ -11,10 +11,8 @@ Skips variants that already have a core and reports the ones with no tile to
 build from -- those need a real core from Blender.
 """
 import argparse
-import collections
 import csv
 import os
-import re
 import subprocess
 import sys
 
@@ -23,6 +21,9 @@ HOME = os.path.expanduser("~")
 RELEASE = f"{HOME}/Dropbox/projects/Hardware/objects/OpenForge/tiles"
 DEV = f"{HOME}/Dropbox/projects/Hardware/objects/OpenForgeDevelopment/tiles"
 LIB = f"{DEV}/generic/separate_wall/library"
+# Same hang guard as apply-gaps.py: every make-core.py call goes through Docker,
+# and a stale docker.socket leaves the run wedged with no output.
+TIMEOUT = 1800
 
 
 def main():
@@ -80,7 +81,10 @@ def main():
         letter = v.rsplit(".", 1)[-1]
         blend = f"{LIB}/library.primary.{letter}.blend"
         if not os.path.isfile(blend):
-            print(f"NO LIBRARY for letter {letter!r} ({v})", file=sys.stderr)
+            # see the note in apply-gaps.py: corner/s2w variants end in a size,
+            # not a wall letter, and need the corner process instead
+            print(f"NO LIBRARY for letter {letter!r} ({v}) -- corner/s2w pieces "
+                  f"need the corner process, not a letter library", file=sys.stderr)
             missing += 1
             continue
         out = os.path.join(out_dir, f"{v}.core.stl")
@@ -96,7 +100,14 @@ def main():
                   + (f"  --flip -> {v}" if flip else ""))
             continue
         env = dict(os.environ, AB_ENTRYPOINT="python")
-        p = subprocess.run(cmd, env=env, cwd=REPO, capture_output=True, text=True)
+        try:
+            p = subprocess.run(cmd, env=env, cwd=REPO, capture_output=True,
+                               text=True, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(f"TIMEOUT {v} after {TIMEOUT}s -- check for a stale docker.socket",
+                  file=sys.stderr, flush=True)
+            missing += 1
+            continue
         # make-core.py imports autoblender.union for the repair pass, and that
         # package redirects sys.stdout to stderr (it keeps binary STL pipes
         # clean), so its later prints land on stderr.  Search both.
@@ -105,7 +116,8 @@ def main():
         # is the one defect that has actually got a whole batch rejected
         note = [l for l in out_lines if l.startswith("# wrote")]
         for l in out_lines:
-            if l.startswith("# base-vs-wall") and "CHECK" in l:
+            if l.startswith("# NOT squaring") or (l.startswith("# base-vs-wall")
+                                                  and "CHECK" in l):
                 print(f"     {l}", flush=True)
         if p.returncode == 0 and note:
             print(note[0], flush=True)
@@ -121,9 +133,15 @@ def main():
             # the queue still says has_core=no until the survey re-runs, and
             # apply-gaps then silently builds nothing.  Refresh it here rather
             # than leaving a stale queue for the next step to trip over.
-            subprocess.run([sys.executable, os.path.join(REPO, "bin", "option-gaps.py")],
-                           cwd=REPO)
-            print("queue refreshed")
+            r = subprocess.run([sys.executable,
+                                os.path.join(REPO, "bin", "option-gaps.py")],
+                               cwd=REPO, timeout=TIMEOUT)
+            # Do not claim a refresh that did not happen: apply-gaps silently
+            # builds nothing when the queue still says has_core=no.
+            print("queue refreshed" if r.returncode == 0 else
+                  f"QUEUE REFRESH FAILED (exit {r.returncode}) -- run "
+                  f"bin/option-gaps.py before apply-gaps",
+                  file=sys.stdout if r.returncode == 0 else sys.stderr)
 
 
 if __name__ == "__main__":

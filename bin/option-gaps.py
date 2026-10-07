@@ -19,6 +19,10 @@ DEV = f"{HOME}/Dropbox/projects/Hardware/objects/OpenForgeDevelopment/tiles"
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "docs", "option-gaps.tsv")
 
+COLUMNS = ("texture", "family", "variant", "missing_option", "gap_class",
+           "likely_deliberate", "has_core", "core_path", "node_group",
+           "set_args", "out_path", "status")
+
 # docs/connection-options.md
 _MAPPING_RAW = {
     "openforge":                  ("OpenForge", ""),
@@ -62,6 +66,17 @@ def canon(option):
     return ",".join(sorted(tags))
 
 
+def spell(option):
+    """How a connection is written in a FILENAME: canon() order, but `pegs` last.
+
+    canon() stays the identity key (statuses, comparisons).  Filenames follow the
+    release tree, which writes `side,pegs` -- 142 released files, none `pegs,side`,
+    and every option folder is `side,pegs` (openforge-renamer ruling, 2026-09-29).
+    """
+    tags = option.split(",")
+    return ",".join([t for t in tags if t != "pegs"] + [t for t in tags if t == "pegs"])
+
+
 def is_corner_family(family):
     return "corner" in family.lower()
 
@@ -69,29 +84,48 @@ def is_corner_family(family):
 def mapping_for(option, family, variant=""):
     """(node_group, set_args).  Corners and +filament go through Corner.Left.
 
-    A `+low` piece must also set Low=True: the OpenLock and OpenForge+Side groups
-    place side locks at full-wall height otherwise, leaving them standing ~17.5mm
-    proud of a low wall.  `+low` is part of the piece name, not the option, so it
-    cannot come from the option->settings table alone.
+    A `+low` piece must also set Low=True: the groups place side locks at
+    full-wall height otherwise, leaving them standing ~17.5mm proud of a low
+    wall.  `+low` is part of the piece name, not the option, so it cannot come
+    from the option->settings table alone.
     """
     if option == canon("openforge,side+filament") or (
             is_corner_family(family) and option in CORNER_LOCK_STYLE):
-        return "Corner.Left", "Port Block=False;Lock Style=%s" % CORNER_LOCK_STYLE[option]
-    toks = option.split(",")
-    if "pegs" in toks:
-        # pegs are a second pass: build the base variant, then apply the Pegs
-        # group (which unions in that library's Pegs-<L>-Wall object).  A ';'
-        # in node_group means "chain these groups in order".
-        base = canon(",".join(t for t in toks if t != "pegs"))
-        group, args = MAPPING.get(base, ("", ""))
-        if group:
-            group = f"{group};Pegs"
+        group = "Corner.Left"
+        args = "Port Block=False;Lock Style=%s" % CORNER_LOCK_STYLE[option]
     else:
-        group, args = MAPPING.get(option, ("", ""))
-    if group in ("OpenLock", "OpenForge+Side") and "+low" in variant:
+        toks = option.split(",")
+        if "pegs" in toks:
+            # pegs are a second pass: build the base variant, then apply the Pegs
+            # group (which unions in that library's Pegs-<L>-Wall object).  A ';'
+            # in node_group means "chain these groups in order".
+            base = canon(",".join(t for t in toks if t != "pegs"))
+            group, args = MAPPING.get(base, ("", ""))
+            if group:
+                group = f"{group};Pegs"
+        else:
+            group, args = MAPPING.get(option, ("", ""))
+
+    # Test the FIRST stage: a `;Pegs` chain still drives the base group, and
+    # testing the whole string meant a `+low` pegs row silently got no Low=True.
+    first = group.split(";")[0]
+    if first in LOW_AWARE and "+low" in variant:
         args = ";".join(filter(None, [args, "Low=True"]))
+        # These groups carry TWO lock-style sockets, `Lock Style` and `Lock Style
+        # (Low)`, and `Low=True` only selects which one is read.  Setting the
+        # full-height socket on a low wall left the low one at its default, so a
+        # `+low` DragonLock side file would have been built with OpenLock side
+        # locks.  Checked across all five libraries: OpenForge+Side and
+        # Corner.Left/Right have both sockets, OpenLock has neither (it takes
+        # `Low` alone), so the rename is scoped to the two that do.
+        if first in LOCK_STYLE_LOW:
+            args = args.replace("Lock Style=", "Lock Style (Low)=")
     return group, args
 
+
+# groups with a `Low` input socket, and the subset that also has `Lock Style (Low)`
+LOW_AWARE = ("OpenLock", "OpenForge+Side", "Corner.Left", "Corner.Right")
+LOCK_STYLE_LOW = ("OpenForge+Side", "Corner.Left", "Corner.Right")
 
 MAPPING = {canon(k): v for k, v in _MAPPING_RAW.items()}
 CORNER_LOCK_STYLE = {canon(k): v for k, v in _CORNER_LOCK_STYLE_RAW.items()}
@@ -178,6 +212,36 @@ def find_core(idx, variant, texture):
     # fallback: dev drops the '<texture>#' and files sit under the texture folder
     piece = prefix.split("#", 1)[1] if "#" in prefix else prefix
     return _match(by_texture.get(texture, ()), piece, want)
+
+
+def write_tsv(path, header, rows):
+    """Replace a TSV atomically: write a sibling temp file, then os.replace.
+
+    docs/option-gaps.tsv carries the `status` column, which is hand-entered
+    judgement with probe evidence in it and cannot be regenerated.  Three
+    scripts used to rewrite this file with open(path, "w"), which truncates
+    first -- a crash, a full disk or a Ctrl-C mid-write left a half-written
+    queue and lost that work.  os.replace is atomic on the same filesystem, so
+    the old file survives intact until the new one is complete.
+
+    The temp file is a sibling (not /tmp) so the rename stays within one
+    filesystem; across filesystems os.replace falls back to a copy and loses
+    the atomicity this exists to provide.
+    """
+    import tempfile
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".option-gaps.", suffix=".tsv")
+    try:
+        with os.fdopen(fd, "w", newline="") as fh:
+            w = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            w.writerow(header)
+            w.writerows(rows)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def prior_status(path):
@@ -294,7 +358,7 @@ def main():
                 node_group, set_args = mapping_for(option, family, variant)
                 core = find_core(cores, variant, texture)
                 out = "/".join(p for p in (DEV, texture, "updates", sub,
-                                           *chain, f"{variant}.{option}.stl") if p)
+                                           *chain, f"{variant}.{spell(option)}.stl") if p)
                 rows.append([texture, family, variant, option, gap_class, deliberate,
                              "yes" if core else "no", core, node_group, set_args,
                              out, kept.get((texture, family, variant, option), "")])
@@ -303,13 +367,7 @@ def main():
     rows.sort(key=lambda r: (r[6] != "yes", r[5] != "no", order[r[4]],
                              r[0], r[1], r[2], r[3]))
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", newline="") as fh:
-        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        w.writerow(["texture", "family", "variant", "missing_option", "gap_class",
-                    "likely_deliberate", "has_core", "core_path", "node_group",
-                    "set_args", "out_path", "status"])
-        w.writerows(rows)
-        w.writerows(seeded)
+    write_tsv(OUT, COLUMNS, rows + seeded)
 
     print(f"wrote {len(rows)} rows (+{len(seeded)} seeded) to {OUT}", file=sys.stderr)
     print(f"unparsed files: {len(unparsed)}", file=sys.stderr)
@@ -325,7 +383,27 @@ def demo():
     assert mapping_for("openforge,side+filament", "aztlan/x")[0] == "Corner.Left"
     assert mapping_for("openforge,side", "aztlan/s2w/corner/window#corner+s2w") == (
         "Corner.Left", "Port Block=False;Lock Style=OpenLock")
+    # +low must drive the LOW lock-style socket, not the full-height one
+    g, a = mapping_for(canon("openforge,side+dragonlock"), "x/wall+low",
+                       "t#wall+low.A")
+    assert g == "OpenForge+Side" and "Lock Style (Low)=DragonLock" in a, a
+    assert "Lock Style=DragonLock" not in a, a
+    assert "Low=True" in a, a
+    # a full-height wall is untouched
+    g, a = mapping_for(canon("openforge,side+dragonlock"), "x/wall", "t#wall.A")
+    assert a == "Lock Style=DragonLock", a
+    # a +low corner drives the low socket too
+    g, a = mapping_for(canon("openforge,side+dragonlock"), "x/corner+s2w",
+                       "t#corner,wall+low.BA")
+    assert g == "Corner.Left" and "Lock Style (Low)=DragonLock" in a and "Low=True" in a, a
+    # a +low pegs chain still gets Low=True despite the ";Pegs" suffix
+    g, a = mapping_for(canon("openlock,pegs"), "x/wall+low", "t#wall+low.A")
+    assert g.startswith("OpenLock;") and "Low=True" in a, (g, a)
+    # OpenLock has no (Low) lock-style socket, so it must NOT be renamed
+    assert "Lock Style (Low)" not in a, a
     assert mapping_for("dragonlock", "aztlan/x") == ("", "")
+    assert spell(canon("openlock+unsupported,side,pegs")) == "openlock+unsupported,side,pegs"
+    assert spell(canon("openforge,side+dragonlock")) == "openforge,side+dragonlock"
     print("demo ok")
 
 

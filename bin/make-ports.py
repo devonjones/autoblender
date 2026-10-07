@@ -28,7 +28,7 @@ import bpy      # must come first: the bpy module registers bmesh on init,
 import bmesh   # so importing bmesh before bpy raises ModuleNotFoundError
 
 # Ports are DISCOVERED from the library, not hardcoded: a wall has a port block
-# per band per end, and the bands vary -- stone_brick tiles are 1/2" taller and
+# per band per end, and the bands vary -- the facades tiles are 1/2" taller and
 # carry a third (high) bay.  Anything matching `Port Block-<L>.side[.<band>].<A|B>`
 # is a port.  Full-width blocks (no .A/.B) are the band as a whole and are not
 # probed individually.
@@ -130,11 +130,20 @@ def centre(obj):
 
 
 def style_of(name):
+    """Which lock style a cutter belongs to, read off its name.
+
+    The fallback is deliberately narrow.  It used to return "openlock" for ANY
+    name with no style word in it, which swept up base negatives like
+    `Negative-BA-Dragonlock`, `...Magnetic` and `...Flex` as openlock SIDE
+    cutters -- they are neither.  Only a name that identifies itself as a side
+    cutter may take the default; anything else is returned as None so
+    match_cutters skips it rather than mispairing it with a port block.
+    """
     low = name.lower()
     for word, style in STYLE_WORDS.items():
         if word in low:
             return style
-    return "openlock"          # unqualified names are the openlock cutters
+    return "openlock" if "side" in low else None
 
 
 def match_cutters(blocks, cutters, style):
@@ -239,7 +248,6 @@ def face_verts(obj, block, eps=1e-3):
 
 
 def nonmanifold(obj):
-    import bmesh                       # after bpy, never at module top
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     n = sum(1 for e in bm.edges if not e.is_manifold)
@@ -361,10 +369,14 @@ def main():
               f"{'green' if verdict[p] else 'RED' + why}")
 
     green = [p for p in ports if verdict[p]]
+    if a.probe_only:
+        # reporting "no usable ports" is what --probe-only exists to do, so it
+        # is a normal result here, not a failure
+        if not green:
+            print("# no usable ports on this piece")
+        return
     if not green:
         raise SystemExit("no usable ports on this piece")
-    if a.probe_only:
-        return
 
     cuts = match_cutters({p: blocks[p] for p in green}, cutters, a.style)
     unmatched = [p for p, c in cuts.items() if c is None]
@@ -377,12 +389,18 @@ def main():
         print(f"# cut {p:12s} with {cuts[p].name!r}")
         boolean(piece, cuts[p], "DIFFERENCE")
 
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    if not piece.data.polygons:
+        raise SystemExit(f"boolean chain left no geometry for {os.path.basename(a.out)} "
+                         f"-- nothing written")
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     bpy.ops.object.select_all(action="DESELECT")
     piece.select_set(True)
     bpy.context.view_layer.objects.active = piece
     bpy.ops.wm.stl_export(filepath=a.out, export_selected_objects=True)
-    print(f"# wrote {os.path.basename(a.out)} with {len(green)}/4 ports: {', '.join(green)}")
+    # len(ports), not a hardcoded 4: every library actually exposes six ports
+    # (Low/Mid/High x A/B), so "4" understated it on every High-capable piece.
+    print(f"# wrote {os.path.basename(a.out)} with {len(green)}/{len(ports)} ports: "
+          f"{', '.join(green)}")
 
 
 if __name__ == "__main__":

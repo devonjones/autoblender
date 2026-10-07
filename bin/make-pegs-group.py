@@ -11,11 +11,13 @@ puts pegs on the same documented interface as every other option.
     Object Info|
     (Pegs-<L>-Wall, RELATIVE)
 
-Run it inside the bpy container:
+Run it inside the bpy container, via the shim:
 
-    docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -v /home:/home \
-        --entrypoint python autoblender:latest \
-        bin/make-pegs-group.py <library.blend> [-o out.blend]
+    AB_ENTRYPOINT=python bin/ab bin/make-pegs-group.py <library.blend> [-o out.blend]
+
+(The hand-written docker line this used to document mounted only /home, with no
+`-v "$PWD:/work"` and no `-w`, so the relative script path did not exist inside
+the image.  `bin/ab` mounts $PWD at /work, /home and /mnt, and sets -w /work.)
 
 Without -o it saves in place.  Writes nothing if the library has no peg object.
 """
