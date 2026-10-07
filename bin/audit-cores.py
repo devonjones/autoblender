@@ -64,3 +64,5 @@ for k, v in verdict.most_common():
 print("\n-- per core --")
 for core, why in sorted(seen.items()):
     print(f"  {why:34s} {core.split('/tiles/')[-1]}")
+if verdict["load error"]:
+    sys.exit(f"{verdict['load error']} core(s) could not be loaded -- see 'load error' above")

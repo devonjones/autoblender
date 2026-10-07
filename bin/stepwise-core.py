@@ -47,16 +47,16 @@ def voids(m):
     return sum(1 for c in m.decompose() if c.volume() < 0)
 
 
-def main(src, dst):
-    tm = trimesh.load(src, force="mesh")
-    groups = [fi for fi in shells(tm.faces) if len(fi) >= MIN_TRIS]
+def pair_open_halves(tm, groups):
+    """Join open shells that close each other; returns [(original index, faces)].
 
-    # A body with an internal sheet glued along a seam splits into open halves
-    # (shells() only joins across 2-face edges).  Fan-filling each half makes two
-    # bogus solids; instead pair open shells that close each other.  Leftover
-    # open shells (the sheets themselves) fall through to repair_shell; their fan
-    # fill is ~0.02mm3, above FIN_MM3, and the internal-shell check below is what
-    # drops them.  Seen on every nova_trail column export.
+    A body with an internal sheet glued along a seam splits into open halves
+    (shells() only joins across 2-face edges).  Fan-filling each half makes two
+    bogus solids, so pair them first.  Leftover open shells (the sheets) fall
+    through to repair_shell; their fan fill is ~0.02mm3, above FIN_MM3, and the
+    internal-shell check in main() is what drops them.  Seen on every nova_trail
+    column export.  The original index is kept so every report line agrees.
+    """
     # ponytail: O(n^2) over open shells and pairs only two at a time -- a shell
     # that absorbs one partner can't take a third; grow groups transitively if a
     # body ever splits into 3+ open pieces.
@@ -74,21 +74,30 @@ def main(src, dst):
                 groups[a] = np.concatenate([groups[a], groups[b]])
                 paired |= {a, b}
                 absorbed.add(b)
-    groups = [fi for k, fi in enumerate(groups) if k not in absorbed]
+    return [(k, fi) for k, fi in enumerate(groups) if k not in absorbed]
 
+
+def repair_all(tm, groups):
+    """[(index, manifold or None if unrepairable, submesh)], zero-volume shells dropped."""
     parts = []
-    for i, fi in enumerate(groups):
+    for i, fi in groups:
         sub = tm.submesh([fi], append=True, repair=False)
         man, rung = repair_shell(sub)
         if man is None:
             print(f"shell {i}: UNREPAIRABLE ({len(fi)} tris) -- held")
             parts.append((i, None, sub))
-            continue
-        if abs(man.volume()) < MIN_VOL:
-            continue
-        if rung != "ok":
-            print(f"shell {i}: repaired ({rung})")
-        parts.append((i, man, sub))
+        elif abs(man.volume()) >= MIN_VOL:
+            if rung != "ok":
+                print(f"shell {i}: repaired ({rung})")
+            parts.append((i, man, sub))
+    return parts
+
+
+def main(src, dst):
+    tm = trimesh.load(src, force="mesh")
+    groups = pair_open_halves(tm, [fi for fi in shells(tm.faces) if len(fi) >= MIN_TRIS])
+
+    parts = repair_all(tm, groups)
     good = sorted((p for p in parts if p[1] is not None), key=lambda p: -p[1].volume())
     held = [p for p in parts if p[1] is None]
     print(f"{len(parts)} shells")

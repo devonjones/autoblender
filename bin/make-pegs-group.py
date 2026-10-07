@@ -15,10 +15,6 @@ Run it inside the bpy container, via the shim:
 
     AB_ENTRYPOINT=python bin/ab bin/make-pegs-group.py <library.blend> [-o out.blend]
 
-(The hand-written docker line this used to document mounted only /home, with no
-`-v "$PWD:/work"` and no `-w`, so the relative script path did not exist inside
-the image.  `bin/ab` mounts $PWD at /work, /home and /mnt, and sets -w /work.)
-
 Without -o it saves in place.  Writes nothing if the library has no peg object.
 """
 import argparse

@@ -186,9 +186,8 @@ Two things to take from this:
    keep the 6mm gap, so the tile sits at its assembled height above the glued-on base.
 
 ⚠ This differs from `ab cut --z 6 --keep above`, which drops the kept part to z=0. Same
-plane, different convention. Relevant to `drive.py`'s `cut-6mm` process, which uses
-`ab cut` and will therefore emit a part at z=0 rather than z=6. Fine if the consumer just
-wants something printable; wrong if they expect the OpenForge convention.
+plane, different convention. STL Tools' `cut-6mm` (`src/autoblender/api.py`) drops to z=0
+by default; unticking its drop option keeps the part at z=6, the OpenForge convention.
 
 ## Output → group + settings
 
@@ -204,7 +203,7 @@ first time you re-run this.
 | `openlock+unsupported` | `OpenLock` | `OpenLock Supports=False` |
 | `openlock,side` | `OpenLock` | `Side Locks=True` |
 | `openlock+unsupported,side` | `OpenLock` | `OpenLock Supports=False` `Side Locks=True` |
-| any corner | `Corner.Left` (BA library only) | `Port Block=False`, `Lock Style=OpenLock\|DragonLock\|Filament` |
+| any corner | `Corner.Left` or `Corner.Right` (BA library only) — whichever end the core narrows at; the queue writes `Left` | `Port Block=False`, `Lock Style=OpenLock\|DragonLock\|Filament` |
 
 `+low` pieces set `Low=True` and, in `OpenForge+Side`, take `Lock Style (Low)` instead of
 `Lock Style`.

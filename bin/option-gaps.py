@@ -3,9 +3,12 @@
 
 Read-only against Dropbox. Writes a TSV work queue into the autoblender repo.
 
-Model (the user's): within a piece "family" (the directory holding the option
-subfolders), the expected option set is the union of options seen across all
-variants in that family.  Anything in the union with no file is a gap.
+A gap is an option with no file, found three ways (the gap_class column):
+  family       -- the option exists for another variant in the same family
+                  (the directory holding the option subfolders);
+  family_type  -- it exists for the same family path in another texture;
+  canonical    -- the hard floor: openlock implies openlock+unsupported, and the
+                  pegs variants follow from the openlock ones.
 """
 import collections
 import csv
@@ -33,8 +36,8 @@ _MAPPING_RAW = {
     "openlock,side":              ("OpenLock", "Side Locks=True"),
     "openlock+unsupported,side":  ("OpenLock", "OpenLock Supports=False;Side Locks=True"),
 }
-# blueprint/ is the temple prep area: it holds copies of cores under the same
-# names, sometimes already cut.  Devon: "don't use the temple folders".
+# blueprint/ is the temple prep area: copies of cores under the same names,
+# sometimes already cut -- never a source.
 SKIP_TEXTURES = {"blueprint"}
 # hard floor: openlock present => openlock+unsupported expected
 CANONICAL = ("openlock", "openlock+unsupported")
@@ -237,6 +240,12 @@ def write_tsv(path, header, rows):
             w = csv.writer(fh, delimiter="\t", lineterminator="\n")
             w.writerow(header)
             w.writerows(rows)
+            fh.flush()
+            os.fsync(fh.fileno())       # a crash after the rename must not leave it empty
+        try:                            # mkstemp makes 0600; keep the file's own mode
+            os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        except FileNotFoundError:
+            os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
@@ -248,16 +257,17 @@ def prior_status(path):
     """Statuses the user has marked, keyed by identity, so a regeneration keeps
     them.  Without this every re-run would silently discard the accept/reject
     work, which is the only human-supplied column in the file."""
-    kept = {}
+    survey, seeded = {}, {}
     try:
         with open(path, newline="") as fh:
             for r in csv.DictReader(fh, delimiter="\t"):
                 if r.get("status"):
-                    kept[(r["texture"], r["family"], r["variant"],
+                    into = seeded if r.get("gap_class") == "seeded" else survey
+                    into[(r["texture"], r["family"], r["variant"],
                           r["missing_option"])] = r["status"]
     except FileNotFoundError:
         pass
-    return kept
+    return {**seeded, **survey}     # a row present twice: the survey copy's status wins
 
 
 def prior_seeded(path):
@@ -283,6 +293,14 @@ def prior_seeded(path):
                     if r["gap_class"] == "seeded"]
     except FileNotFoundError:
         return []
+
+
+def drop_surveyed(rows, seeded):
+    """Seeded rows the survey now emits itself (the texture shipped).  Keeping
+    both would list the row twice, and the stale seeded status would compete
+    with the one being edited."""
+    have = {tuple(r[:4]) for r in rows}
+    return [r for r in seeded if tuple(r[:4]) not in have]
 
 
 def main():
@@ -381,6 +399,7 @@ def main():
     rows.sort(key=lambda r: (r[6] != "yes", r[5] != "no", order[r[4]],
                              r[0], r[1], r[2], r[3]))
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    seeded = drop_surveyed(rows, seeded)
     write_tsv(OUT, COLUMNS, rows + seeded)
 
     print(f"wrote {len(rows)} rows (+{len(seeded)} seeded) to {OUT}", file=sys.stderr)
@@ -418,6 +437,25 @@ def demo():
     assert mapping_for("dragonlock", "aztlan/x") == ("", "")
     assert spell(canon("openlock+unsupported,side,pegs")) == "openlock+unsupported,side,pegs"
     assert spell(canon("openforge,side+dragonlock")) == "openforge,side+dragonlock"
+
+    # a texture that ships stops being seeded: the survey row replaces it, and the
+    # survey copy's status is the one that survives a regeneration
+    import tempfile
+    pad = [""] * (len(COLUMNS) - 4)
+    survey = [["t", "f", "v", "o", *pad]]
+    seeded = [["t", "f", "v", "o", *pad], ["t", "f", "w", "o", *pad]]
+    assert [r[2] for r in drop_surveyed(survey, seeded)] == ["w"]
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "q.tsv")
+        row = dict.fromkeys(COLUMNS, "")
+        row.update(texture="t", family="f", variant="v", missing_option="o")
+        write_tsv(path, COLUMNS, [[*{**row, "gap_class": "family", "status": "NEW"}.values()],
+                                  [*{**row, "gap_class": "seeded", "status": "OLD"}.values()]])
+        assert prior_status(path) == {("t", "f", "v", "o"): "NEW"}, prior_status(path)
+        # the rewrite keeps the file's mode (mkstemp alone would leave 0600)
+        os.chmod(path, 0o644)
+        write_tsv(path, COLUMNS, [])
+        assert os.stat(path).st_mode & 0o777 == 0o644, oct(os.stat(path).st_mode)
     print("demo ok")
 
 

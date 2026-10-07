@@ -4,14 +4,10 @@
     AB_ENTRYPOINT=python bin/ab bin/qc-updates.py <updates-dir-or-file> [--fix]
 
 Prints watertight / bodies / non-manifold edges / z range / volume, and each
-file's volume against its `openlock` sibling.  Do NOT read a fixed expectation
-into that percentage: support volume scales with wall length, so the delta is
-letter-dependent -- measured 2026-09-23, 21.8mm3 on IA (1x, 0.21% of the piece),
-43.6mm3 on BA (1.5x, 0.26%), 153.5mm3 on Q (4x, 0.54%).  A short piece can even
-come out LARGER than its shipped sibling (door+rectangular narrow.IA reads
-+0.07%: the core is +0.29% and the supports only -0.21%).  To judge a suspicious
-number, build the SUPPORTED version from the same core and compare that to
-shipped -- it separates a core that differs from a node group misbehaving.
+file's volume against its `openlock` sibling.  The expected delta is
+letter-dependent (support volume scales with wall length; measured figures are in
+docs/backfill-workstream.md).  To judge a suspicious number, build the SUPPORTED
+version from the same core and compare that to shipped.
 
 --fix drops zero-volume bodies (<= FIN_MM3) and rewrites the file.  These are
 float32 slivers: manifold3d's output is clean, but writing STL at float32 folds

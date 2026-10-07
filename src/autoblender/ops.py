@@ -573,11 +573,16 @@ def clamp_to(obj, target, axes="X", gate_axes=None):
 
 def boolean(obj, target, operation, solver="MANIFOLD"):
     bpy.context.view_layer.objects.active = obj
+    mod = _boolean_modifier(obj, target, operation, solver)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def _boolean_modifier(obj, target, operation, solver):
     mod = obj.modifiers.new("Boolean", "BOOLEAN")
     mod.operation = operation
     mod.object = target
     mod.solver = solver
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    return mod
 
 
 def join(obj, target):
@@ -596,8 +601,8 @@ def drop(obj):
 def _selfcheck():
     """Run inside the image: `python -m autoblender.ops`.
 
-    Covers the two things in this module with no other check on them: the
-    recursive solver override, and the invariant that `nudge_z` moves MESH DATA
+    Covers the solver override (recursive, and wired through boolean() and
+    apply_geometry_nodes) and the invariant that `nudge_z` moves MESH DATA
     rather than the object transform.
     """
     import bpy
@@ -654,6 +659,31 @@ def _selfcheck():
     assert tuple(obj.location) == before_loc, "nudge_z moved the OBJECT, not the mesh"
     assert all(abs((a - b) - -0.02) < 1e-6 for a, b in zip(after_z, before_z)), \
         f"mesh data did not move by the nudge: {before_z} -> {after_z}"
+
+    # --- solver plumbing ----------------------------------------------------
+    # boolean() must use the solver it is given, not a hardcoded one
+    other = bpy.data.objects.new("other", mesh.copy())
+    for solver in ("EXACT", "FLOAT", "MANIFOLD"):
+        mod = _boolean_modifier(obj, other, "UNION", solver)
+        assert mod.solver == solver, (solver, mod.solver)
+        obj.modifiers.remove(mod)
+
+    # apply_geometry_nodes(solver=...) reaches the group's booleans, and says so
+    # loudly when there are none to reach
+    import contextlib
+    import io
+    withbool = tree("withbool")
+    withbool.nodes.new("GeometryNodeMeshBoolean")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+        apply_geometry_nodes(obj, "withbool", "/nonexistent.blend", solver="FLOAT")
+    assert "solver -> FLOAT on 1" in err.getvalue(), err.getvalue()
+    assert all(n.solver == "FLOAT" for n in withbool.nodes
+               if n.bl_idname == "GeometryNodeMeshBoolean")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+        apply_geometry_nodes(obj, "passthrough", "/nonexistent.blend", solver="FLOAT")
+    assert "WARNING --solver FLOAT matched no Mesh Boolean" in err.getvalue(), err.getvalue()
 
     print("ops selfcheck ok")
 

@@ -16,14 +16,13 @@ import os
 import subprocess
 import sys
 
+import abrun
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.expanduser("~")
 RELEASE = f"{HOME}/Dropbox/projects/Hardware/objects/OpenForge/tiles"
 DEV = f"{HOME}/Dropbox/projects/Hardware/objects/OpenForgeDevelopment/tiles"
 LIB = f"{DEV}/generic/separate_wall/library"
-# Same hang guard as apply-gaps.py: every make-core.py call goes through Docker,
-# and a stale docker.socket leaves the run wedged with no output.
-TIMEOUT = 1800
 
 
 def family_matches(row_family, want):
@@ -72,6 +71,24 @@ def demo():
     assert tile_key("t%block#wall,boss_door+dungeon_door+skull+reverse.Q") == \
         ("t%block#wall,boss_door+dungeon_door+skull.Q", True)
     print("build-cores demo ok")
+
+
+def build(cmd, out):
+    """Run make-core.py.  None on success, else why; a partial core is removed,
+    since the next run would skip it as already built."""
+    p = abrun.run(cmd, python=True, cwd=REPO)
+    # make-core.py's own prints land on stderr (autoblender redirects stdout).
+    # The alignment check is surfaced even on success: an unsquare tile is the
+    # one defect that has got a whole batch rejected.
+    for line in (p.stdout + p.stderr).splitlines():
+        if line.startswith(("# wrote", "# NOT squaring")) or (
+                line.startswith("# base-vs-wall") and "CHECK" in line):
+            print(f"     {line}", flush=True)
+    if p.returncode == 0 and os.path.exists(out):
+        return None
+    if os.path.exists(out):
+        os.unlink(out)
+    return abrun.why(p)
 
 
 def main():
@@ -135,7 +152,7 @@ def main():
         if os.path.exists(out):
             skipped += 1
             continue
-        cmd = [f"{REPO}/bin/ab", "bin/make-core.py", "--library", blend,
+        cmd = ["bin/make-core.py", "--library", blend,
                "--texture", tex_name, "--tile", tile, "--out", out]
         if flip:
             cmd.append("--flip")
@@ -143,33 +160,11 @@ def main():
             print(f"{letter:3s} {os.path.basename(tile)}"
                   + (f"  --flip -> {v}" if flip else ""))
             continue
-        env = dict(os.environ, AB_ENTRYPOINT="python")
-        try:
-            p = subprocess.run(cmd, env=env, cwd=REPO, capture_output=True,
-                               text=True, timeout=TIMEOUT)
-        except subprocess.TimeoutExpired:
-            print(f"TIMEOUT {v} after {TIMEOUT}s -- check for a stale docker.socket",
-                  file=sys.stderr, flush=True)
-            missing += 1
-            continue
-        # make-core.py imports autoblender.union for the repair pass, and that
-        # package redirects sys.stdout to stderr (it keeps binary STL pipes
-        # clean), so its later prints land on stderr.  Search both.
-        out_lines = (p.stdout + p.stderr).splitlines()
-        # surface the alignment check too, not just "# wrote" -- an unsquare tile
-        # is the one defect that has actually got a whole batch rejected
-        note = [l for l in out_lines if l.startswith("# wrote")]
-        for l in out_lines:
-            if l.startswith("# NOT squaring") or (l.startswith("# base-vs-wall")
-                                                  and "CHECK" in l):
-                print(f"     {l}", flush=True)
-        if p.returncode == 0 and note:
-            print(note[0], flush=True)
+        reason = build(cmd, out)
+        if reason is None:
             ok += 1
         else:
-            why = [l for l in (p.stdout + p.stderr).splitlines()
-                   if l.strip() and not l.startswith(("Info:", "Timer", "Read blend", "#"))]
-            print(f"FAIL {v}: {why[-1] if why else 'no output'}", file=sys.stderr, flush=True)
+            print(f"FAIL {v}: {reason}", file=sys.stderr, flush=True)
             missing += 1
     if not a.dry:
         print(f"done: {ok} cores built, {missing} failed/no tile, {skipped} already existed")
@@ -177,15 +172,17 @@ def main():
             # the queue still says has_core=no until the survey re-runs, and
             # apply-gaps then silently builds nothing.  Refresh it here rather
             # than leaving a stale queue for the next step to trip over.
-            r = subprocess.run([sys.executable,
-                                os.path.join(REPO, "bin", "option-gaps.py")],
-                               cwd=REPO, timeout=TIMEOUT)
+            try:
+                rc = subprocess.run([sys.executable,
+                                     os.path.join(REPO, "bin", "option-gaps.py")],
+                                    cwd=REPO, timeout=abrun.TIMEOUT).returncode
+            except subprocess.TimeoutExpired:
+                rc = "timed out"
             # Do not claim a refresh that did not happen: apply-gaps silently
             # builds nothing when the queue still says has_core=no.
-            print("queue refreshed" if r.returncode == 0 else
-                  f"QUEUE REFRESH FAILED (exit {r.returncode}) -- run "
-                  f"bin/option-gaps.py before apply-gaps",
-                  file=sys.stdout if r.returncode == 0 else sys.stderr)
+            print("queue refreshed" if rc == 0 else
+                  f"QUEUE REFRESH FAILED ({rc}) -- run bin/option-gaps.py before apply-gaps",
+                  file=sys.stdout if rc == 0 else sys.stderr)
 
 
 if __name__ == "__main__":

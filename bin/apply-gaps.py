@@ -15,8 +15,9 @@ resumable: run it again and it picks up where it stopped.
 import argparse
 import csv
 import os
-import subprocess
 import sys
+
+import abrun
 
 # The OpenForge cut plane sits at the base height, and where the stone texture
 # is tangent to it the cut leaves gross paper-thin flanges instead of a clean
@@ -26,11 +27,6 @@ import sys
 # Only the OpenForge groups get it: an OpenLock group makes no bottom cut, so
 # nudging there would just shorten the piece by 0.02 for nothing.
 NUDGE_Z = -0.02
-# Every `bin/ab` call here goes through Docker.  A stale docker.socket is a known
-# failure on this box and makes the run hang forever with no output, mid-way
-# through a batch of dozens of meshes.  Generous, because a Q-sized MANIFOLD
-# boolean legitimately takes minutes -- this is a hang guard, not a deadline.
-TIMEOUT = 1800
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TSV = os.path.join(REPO, "docs", "option-gaps.tsv")
@@ -75,7 +71,79 @@ def demo():
                        ("status", "REVIEWED: ok")):
         assert not wanted(dict(r, **{field: bad}), "t", "openlock+unsupported",
                           exact=True), field
+    demo_build()
     print("apply-gaps demo ok")
+
+
+def demo_build():
+    """build() against a fake bin/ab: what counts as done, and what is left behind."""
+    import tempfile
+    real = abrun.AB
+    with tempfile.TemporaryDirectory() as d:
+        def fake(body):
+            with open(abrun.AB, "w") as fh:
+                fh.write("#!/bin/sh\n" + body)
+            os.chmod(abrun.AB, 0o755)
+        abrun.AB = os.path.join(d, "ab")
+        out = os.path.join(d, "x.stl")
+        stage = os.path.join(d, "x.stage1.stl")
+        two = [["gn", "apply", "b", "G1", "core", stage], ["gn", "apply", "b", "G2", stage, out]]
+        try:
+            # exit 0 but nothing written is a failure, not "ok"
+            fake("exit 0\n")
+            assert "no mesh was written" in build(two[1:], ["core"], out)
+            # a stage that crashes after writing a partial out leaves no out behind --
+            # the next run would otherwise skip the row as done
+            fake(f"printf partial > {out}\nexit 139\n")
+            r = build(two[1:], ["core"], out)
+            assert r.startswith("exit 139 (SIGSEGV)") and not os.path.exists(out), r
+            # a failed intermediate repair stops the chain, and the stage file goes
+            fake('case "$1" in *qc-updates.py) echo "x (fix FAILED)";; '
+                 '*) printf %0100d 0 > "$6";; esac\nexit 0\n')
+            r = build(two, ["core", stage], out)
+            assert r.startswith("intermediate repair failed on stage 1"), r
+            assert not os.path.exists(stage) and not os.path.exists(out)
+            # a clean chain writes out and removes the intermediate
+            fake('case "$1" in *qc-updates.py) echo ok;; *) printf %0100d 0 > "$6";; esac\n')
+            assert build(two, ["core", stage], out) is None
+            assert os.path.exists(out) and not os.path.exists(stage)
+        finally:
+            abrun.AB = real
+
+
+def build(cmds, srcs, out):
+    """Run one row's stage chain.  None on success, else the reason it failed.
+
+    Stage intermediates and any partial `out` are removed however this exits --
+    including Ctrl-C -- because a leftover `out` is taken as done by the next run.
+    """
+    done = False
+    try:
+        for n, cmd in enumerate(cmds):
+            proc = abrun.run(cmd)
+            if proc.returncode != 0:
+                return abrun.why(proc)
+            if n + 1 < len(cmds):
+                # A float32 fin on an intermediate makes it non-manifold, and the
+                # next stage's MANIFOLD boolean then returns empty geometry --
+                # seen on OpenLock;Pegs.  qc-updates.py signals a failed repair
+                # only by printing "(fix FAILED)"; it has no non-zero exit.
+                fix = abrun.run([f"{abrun.REPO}/bin/qc-updates.py", srcs[n + 1], "--fix"],
+                                python=True)
+                blob = fix.stdout + fix.stderr
+                if fix.returncode != 0 or "fix FAILED" in blob:
+                    return f"intermediate repair failed on stage {n + 1}: {abrun.why(fix)}"
+                note = next((l for l in blob.splitlines() if "CHECK" in l), "")
+                if note:
+                    print(f"     stage {n + 1}: {note.strip()}", file=sys.stderr, flush=True)
+        if not os.path.exists(out) or os.path.getsize(out) <= 84:
+            return "every stage exited 0 but no mesh was written"
+        done = True
+        return None
+    finally:
+        for tmp in srcs[1:] + ([] if done else [out]):
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def main():
@@ -130,7 +198,7 @@ def main():
         srcs = [row["core_path"]] + [f"{out[:-4]}.stage{n}.stl" for n in range(1, len(stages))]
         cmds = []
         for n, group in enumerate(stages):
-            cmd = [f"{REPO}/bin/ab", "gn", "apply", blend, group, srcs[n],
+            cmd = ["gn", "apply", blend, group, srcs[n],
                    srcs[n + 1] if n + 1 < len(srcs) else out]
             if n == 0:
                 for kv in filter(None, row["set_args"].split(";")):
@@ -147,58 +215,13 @@ def main():
             continue
 
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        for n, cmd in enumerate(cmds):
-            try:
-                proc = subprocess.run(cmd, stderr=subprocess.PIPE, text=True,
-                                      timeout=TIMEOUT)
-            except subprocess.TimeoutExpired:
-                print(f"TIMEOUT {os.path.basename(out)} after {TIMEOUT}s "
-                      f"({row['node_group']}) -- check for a stale docker.socket",
-                      file=sys.stderr, flush=True)
-                proc = subprocess.CompletedProcess(cmd, 1, stderr="timed out")
-                break
-            if proc.returncode != 0:
-                break
-            if n + 1 < len(cmds):
-                # A float32 fin on an intermediate makes it non-manifold, and the
-                # next stage's MANIFOLD boolean then returns empty geometry
-                # ("does not contain a mesh") -- seen on OpenLock;Pegs.
-                #
-                # Keep its output and check it: qc-updates.py signals a failed
-                # repair only by printing "(fix FAILED)" -- it has no non-zero
-                # exit -- so discarding both streams was the one place that
-                # could ever have surfaced it.
-                try:
-                    fix = subprocess.run([f"{REPO}/bin/ab", f"{REPO}/bin/qc-updates.py",
-                                          srcs[n + 1], "--fix"],
-                                         env={**os.environ, "AB_ENTRYPOINT": "python"},
-                                         capture_output=True, text=True, timeout=TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    print(f"     qc-updates --fix timed out on stage {n + 1}",
-                          file=sys.stderr, flush=True)
-                else:
-                    blob = fix.stdout + fix.stderr
-                    if fix.returncode != 0 or "fix FAILED" in blob or "CHECK" in blob:
-                        note = next((l for l in blob.splitlines()
-                                     if "fix FAILED" in l or "CHECK" in l), "")
-                        print(f"     intermediate repair problem on stage {n + 1}: "
-                              f"{note.strip() or f'exit {fix.returncode}'}",
-                              file=sys.stderr, flush=True)
-        for tmp in srcs[1:]:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-        if proc.returncode == 0:
+        reason = build(cmds, srcs, out)
+        if reason is None:
             print(f"ok   {os.path.basename(out)}", flush=True)
             ok += 1
         else:
-            # bpy is noisy; the last non-Info line is the one that says why
-            why = [l for l in proc.stderr.splitlines()
-                   if l.strip() and not l.startswith(("Info:", "Timer", "Read blend"))]
             print(f"FAIL {os.path.basename(out)}  ({row['node_group']} "
-                  f"{row['set_args']})\n     {why[-1] if why else 'no error output'}",
-                  file=sys.stderr, flush=True)
-            if os.path.exists(out):
-                os.unlink(out)
+                  f"{row['set_args']})\n     {reason}", file=sys.stderr, flush=True)
             fail += 1
 
     if not args.dry:

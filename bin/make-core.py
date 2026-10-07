@@ -11,8 +11,9 @@ Two alignment traps, both silent:
 
   * The openforge tile has usually been repaired, which drops it to z=0.  It has
     to go back up so its cut face meets the top of the base.
-  * The tile can be off in Y by a multiple of 15mm.  Sub-millimetre differences
-    are just mesh noise and must NOT be "corrected".
+  * The tile can be off in Y by a multiple of 15mm (moved by whole grid steps),
+    and then off by less than half a step in X or Y (squared on the wall band
+    just above the base).
 
 Run it in the bpy container:
 
@@ -23,13 +24,14 @@ Run it in the bpy container:
 import argparse
 import os
 import re
+import shutil
 import sys
 import tempfile
 
 import bpy
 
 GRID = 15.0          # walls are placed on a 15mm grid
-NOISE = 1.0          # anything under this in Y is mesh noise, not an offset
+NOISE = 1.0          # tile bottom within this of the base top already sits on it
 
 
 def bounds(obj):
@@ -89,6 +91,27 @@ def find_base(blend, texture):
     obj = dst.objects[0]
     bpy.context.scene.collection.objects.link(obj)
     return obj
+
+
+def square_on_base(tile, blo, bhi):
+    """Step 2: move the tile by any residual under half a grid step in X and Y."""
+    from mathutils import Vector
+    # Sub-millimetre offsets got whole batches rejected, so this always runs.
+    # Measure the wall just above the base rather than the tile's whole bounding
+    # box: anything protruding in Y higher up (a boss door's skull) drags a
+    # full-bbox centre off, and the band does not care.  Cap at half a grid step
+    # so this only ever squares the tile -- a genuine grid move is step 1's job.
+    wall_c = band_centre(tile, bhi[2] + 2.0, bhi[2] + 6.0)
+    if wall_c:
+        rx = (blo[0] + bhi[0]) / 2 - wall_c[0]
+        ry = (blo[1] + bhi[1]) / 2 - wall_c[1]
+        if abs(rx) < GRID / 2 and abs(ry) < GRID / 2:
+            print(f"# square dx={rx:+.3f} dy={ry:+.3f}")
+            tile.location += Vector((rx, ry, 0.0))
+            bpy.context.view_layer.update()
+        else:
+            print(f"# NOT squaring: residual dx={rx:+.3f} dy={ry:+.3f} "
+                  f"exceeds half a grid step -- check the tile")
 
 
 def main():
@@ -156,31 +179,7 @@ def main():
     tile.location += Vector((0.0, dy_grid, dz))
     bpy.context.view_layer.update()
 
-    # Step 2: square the tile on its base.
-    #
-    # The old code stopped after the grid step, and that left two holes.  An
-    # offset under NOISE was dismissed as mesh noise -- boss_door's tiles were
-    # out 0.84mm and every core built from them was rejected by eye.  An offset
-    # between NOISE and half a grid step was worse: `round(1.85/15)` is 0, so it
-    # was judged "real" and then corrected by nothing at all (door+arched
-    # wide.D, out 1.85mm).  And X was never corrected, which left both
-    # very_narrow.IA cores out by 0.115mm.
-    #
-    # Measure the wall just above the base rather than the tile's whole bounding
-    # box: anything protruding in Y higher up (a boss door's skull) drags a
-    # full-bbox centre off, and the band does not care.  Cap at half a grid step
-    # so this only ever squares the tile -- a genuine grid move is step 1's job.
-    wall_c = band_centre(tile, bhi[2] + 2.0, bhi[2] + 6.0)
-    if wall_c:
-        rx = (blo[0] + bhi[0]) / 2 - wall_c[0]
-        ry = (blo[1] + bhi[1]) / 2 - wall_c[1]
-        if abs(rx) < GRID / 2 and abs(ry) < GRID / 2:
-            print(f"# square dx={rx:+.3f} dy={ry:+.3f}")
-            tile.location += Vector((rx, ry, 0.0))
-            bpy.context.view_layer.update()
-        else:
-            print(f"# NOT squaring: residual dx={rx:+.3f} dy={ry:+.3f} "
-                  f"exceeds half a grid step -- check the tile")
+    square_on_base(tile, blo, bhi)
 
     bpy.ops.object.select_all(action="DESELECT")
     base.select_set(True)
@@ -226,7 +225,7 @@ def main():
     try:
         bpy.ops.wm.stl_export(filepath=raw, export_selected_objects=True)
         if a.no_repair:
-            os.replace(raw, a.out)
+            shutil.move(raw, a.out)     # raw is in the container's /tmp: another device
             print(f"# wrote {os.path.basename(a.out)} UNREPAIRED  h={hi[2]-lo[2]:.3f} "
                   f"tris={len(tile.data.polygons)}")
             return

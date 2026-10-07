@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Add side clip ports to a wall, skipping the ones with nothing behind them.
 
-A wall has four side ports -- upper and lower at each end.  Each has a port
-block (the positive that guarantees a flat mating surface) and a cutter per lock
+A wall has a side port per band at each end, discovered from the library.  Each
+has a port block (the positive that guarantees a flat mating surface) and a cutter per lock
 style.  Where a wall feature sits in the way, e.g. the drain cavity in the lower
 band, cutting the port leaves a gap into that cavity.
 

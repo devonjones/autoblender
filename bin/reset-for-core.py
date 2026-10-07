@@ -25,6 +25,15 @@ og = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(og)
 
 
+def selected(r, a):
+    """A built side-lock row matching the command-line filters."""
+    return ("side" in r["missing_option"]       # only side locks touch the port region
+            and (not a.all_sides or r["texture"] == a.all_sides)
+            and (not a.texture or r["texture"] == a.texture)
+            and (not a.cores or any(c in r["core_path"] for c in a.cores))
+            and bool(r["out_path"]) and os.path.exists(r["out_path"]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cores", nargs="*", help="substrings matched against core_path")
@@ -45,19 +54,7 @@ def main():
     hdr, body = rows[0], rows[1:]
     i = {k: n for n, k in enumerate(hdr)}
 
-    hits = []
-    for r in body:
-        if "side" not in r[i["missing_option"]]:
-            continue                      # only side locks touch the port region
-        if a.all_sides and r[i["texture"]] != a.all_sides:
-            continue
-        if a.texture and r[i["texture"]] != a.texture:
-            continue
-        if a.cores and not any(c in r[i["core_path"]] for c in a.cores):
-            continue
-        if not r[i["out_path"]] or not os.path.exists(r[i["out_path"]]):
-            continue
-        hits.append(r)
+    hits = [r for r in body if selected(dict(zip(hdr, r)), a)]
 
     for r in hits:
         print(f"   {os.path.basename(r[i['out_path']])}")
@@ -67,10 +64,8 @@ def main():
     if a.dry:
         print(f"dry run: {len(hits)} would be reset")
         return
-    # Clear the statuses FIRST, then delete.  The old order unlinked the files
-    # before persisting, so a failure mid-loop left status="" rows pointing at
-    # files that no longer existed -- and apply-gaps skips any row whose output
-    # is missing only after checking status, so those rows were stranded.
+    # Clear the statuses first, then delete: a failure part-way must not leave
+    # rows still marked done whose files are gone.
     og.write_tsv(TSV, hdr, body)
     for r in hits:
         out = r[i["out_path"]]

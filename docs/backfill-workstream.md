@@ -82,8 +82,8 @@ Three tiers, strongest first:
 **Not all of these run in the bpy container.** `option-gaps.py`, `apply-gaps.py`,
 `build-cores.py`, `reset-for-core.py` and `seed-gaps.py` are plain stdlib Python that run
 on the host and shell *out* to `bin/ab`; `make-core.py`, `make-ports.py`,
-`make-pegs-group.py` and `assemble-tile.py` need bpy and run inside it; `qc-updates.py`
-and `stepwise-core.py` need trimesh but not bpy. `bin/ab` is the docker shim; **`AB_ENTRYPOINT=python bin/ab
+`make-pegs-group.py` and `assemble-tile.py` need bpy and run inside it; `qc-updates.py`,
+`stepwise-core.py` and `audit-cores.py` need trimesh but not bpy. `bin/ab` is the docker shim; **`AB_ENTRYPOINT=python bin/ab
 <script.py>`** runs a bpy script with the right mounts (`/home`, `/mnt`, `$PWD` → `/work`).
 
 | tool | what it does |
@@ -105,7 +105,7 @@ and `stepwise-core.py` need trimesh but not bpy. `bin/ab` is the docker shim; **
 ```
 1. build-cores.py <texture> <family-path>        assemble cores from shipped tiles
 2.   → Devon checks them (3D Builder); some need repair
-3. make-ports.py --probe-only  per core          fill % and overhang mm3 per port
+3. make-ports.py --probe-only  per core          fill % and overhang (signed mm) per port
 4.   → Devon sculpts any core reporting overhang
 5. reset-for-core.py …                           if any core changed
 6. apply-gaps.py <texture>                       build
@@ -273,7 +273,7 @@ So the pass is **sculpt, then trim**, and the order matters in both directions:
 
 `make-ports.py --trim` cuts each usable port's band back to `CLEARANCE = 0.05mm` behind
 the plane and rewrites the core. On door+arched all 24 ports came out at exactly -0.050
-with 0 non-manifold edges. `--min-fill` decides which ports get trimmed (default 100;
+with 0 non-manifold edges. `--min-fill` decides which ports get trimmed (default 99.95;
 door+arched `narrow.A` used 99 for its 99.7% Mid ports). A port that will never be cut is
 skipped, so it gets no pointless pocket.
 
@@ -442,17 +442,17 @@ wall, with the sign flipping between plain and reverse:
 +dungeon_door+skull+reverse  base is -0.035 in x, -0.838 in y vs the wall
 ```
 
-`make-core.py` has `NOISE = 1.0`, so a 0.84mm Y offset is below the floor and is never
-corrected — it is only ever read as mesh noise.
+`make-core.py` used `NOISE = 1.0` as a Y floor, so a 0.84mm offset was read as mesh
+noise and never corrected.
 
 **Confirmed by Devon's hand-built replacements.** The same measurement on those reads
 `dy = +0.004 … +0.032`. The texture is identical in both sets, so if 0.84mm had been
 texture asymmetry it would have persisted; it did not. **The 0.84mm was a real
 misalignment, and `NOISE = 1.0` hid it.**
 
-What is still open is the *correction rule*, not the diagnosis — bounding-box centres are
-a biased estimator on a textured wall, and Devon may have aligned on the flat back face
-rather than on centres. Do not just lower `NOISE`; see §7.
+The fix is `make-core.py`'s second step: it squares the tile on the wall band just above
+the base (not the bounding box, which a boss door's skull drags off-centre), and `NOISE`
+now only decides whether the tile needs lifting in Z.
 
 **Stale cores:** six generated cores are sitting in
 `peripherals/boss_door/` (4 non-reverse, 2 reverse). Until they are replaced,
@@ -623,7 +623,7 @@ trimmed at x=19.05 (0.68mm3), original in `*.corner.core.pre-trim.stl`.
   There is no way to tell which cores were hand-dropped except by asking, so a core built
   by `make-core.py` still needs the default nudge.
 - **Four `main()` functions are over the C901 floor**, deferred from PR #3's review by
-  Devon on 2026-10-07 ("defer with tickets"). `AGENT-REVIEWERS.md` says
+  Devon on 2026-10-07 ("defer with tickets"); re-measured on PR #6 with ruff 0.12.5. `AGENT-REVIEWERS.md` says
   `ruff check --select C901 --max-complexity 10 .` must pass on every PR, but no CI
   enforces it — `.github/workflows/deploy.yml` is the only workflow and has no lint step,
   and there is no ruff config in the repo. Measured on the PR head:
@@ -631,8 +631,8 @@ trimmed at x=19.05 (0.68mm3), original in `*.corner.core.pre-trim.stl`.
   | file | `main()` C901 | compounding smell |
   |---|---|---|
   | `build-cores.py` | 18 | nesting depth 4 |
-  | `apply-gaps.py` | 17 | nesting depth 4, twice |
-  | `make-ports.py` | 16 | three workflows in one function (trim / face-check / probe-and-cut) |
+  | `apply-gaps.py` | 12 | per-row work moved into `build()` |
+  | `make-ports.py` | 19 | three workflows in one function (trim / face-check / probe-and-cut) |
   | `option-gaps.py` | 16 | nesting depth 6 |
 
   Also `ops.py:apply_geometry_nodes` now takes 6 parameters (was 4; this PR added
