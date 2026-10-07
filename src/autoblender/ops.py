@@ -601,7 +601,6 @@ def _selfcheck():
     rather than the object transform.
     """
     import bpy
-    from mathutils import Matrix
 
     def tree(name):
         ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
