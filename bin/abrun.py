@@ -8,6 +8,7 @@ names the exit status -- a segfaulting bpy child prints nothing at all.
 import os
 import signal
 import subprocess
+import sys
 import uuid
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,8 +22,8 @@ NOISE = ("Info:", "Timer", "Read blend")
 def run(args, *, python=False, timeout=TIMEOUT, **kw):
     """bin/ab ARGS; stdout and stderr captured as text.
 
-    On timeout the docker client is killed by subprocess, but the container
-    would keep running, so it is named (AB_NAME) and removed explicitly.
+    The container is named (AB_NAME) and removed explicitly on a timeout or any
+    other exception: killing the docker client does not stop it.
     """
     name = f"ab-{uuid.uuid4().hex[:12]}"
     env = dict(kw.pop("env", None) or os.environ, AB_NAME=name)
@@ -33,27 +34,32 @@ def run(args, *, python=False, timeout=TIMEOUT, **kw):
         return subprocess.run(cmd, env=env, capture_output=True, text=True,
                               timeout=timeout, **kw)
     except subprocess.TimeoutExpired as e:
+        # the cause goes last: why() shows the final lines
         return subprocess.CompletedProcess(
-            cmd, 124, _text(e.stdout),
-            _text(e.stderr) + f"\ntimed out after {timeout}s -- check for a stale docker.socket"
-            + _remove(name))
+            cmd, 124, _text(e.stdout), _text(e.stderr) + _remove(name)
+            + f"\ntimed out after {timeout}s -- check for a stale docker.socket")
     except OSError as e:
         return subprocess.CompletedProcess(cmd, 127, "", f"cannot run {AB}: {e}")
     except BaseException:
-        _remove(name)               # Ctrl-C: the container would outlive its client
+        # Ctrl-C: the container would outlive its client.  _remove never raises,
+        # so it cannot mask the exception being propagated.
+        note = _remove(name)
+        if note:
+            print(note.strip(), file=sys.stderr)
         raise
 
 
 def _remove(name):
-    """docker rm -f NAME; '' if gone, else a note for the failure text."""
+    """docker rm -f NAME; '' if gone, else a one-line note.  Never raises."""
     try:
         r = subprocess.run(["docker", "rm", "-f", name], capture_output=True,
-                           text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return f"\ncontainer {name} NOT removed: {e}"
-    if r.returncode != 0 and "No such container" not in r.stderr:
-        return f"\ncontainer {name} NOT removed: {r.stderr.strip()}"
-    return ""
+                           text=True, errors="replace", timeout=60)
+        err = " ".join(r.stderr.split())
+        if r.returncode == 0 or "No such container" in err:
+            return ""
+    except Exception as e:          # noqa: BLE001 -- cleanup must not mask the caller's error
+        err = f"{type(e).__name__}: {e}"
+    return f"\ncontainer {name} NOT removed: {err}"
 
 
 def _text(b):
@@ -125,6 +131,24 @@ def demo():
             open(os.path.join(d, "rmfail"), "w").close()
             p = run(["info"], timeout=1)
             assert "NOT removed" in p.stderr, p.stderr
+            # the cause stays visible behind a failed rm
+            assert why(p).splitlines()[-1].strip().startswith("timed out after 1s"), why(p)
+            os.unlink(os.path.join(d, "rmfail"))
+            # Ctrl-C (any exception once the child started) still removes the
+            # container, and the exception propagates unchanged
+            open(log, "w").close()
+            try:
+                run(["info"], input=1)      # raises inside communicate(), after the client starts
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError("run() swallowed the exception")
+            assert open(log).read().startswith("rm -f ab-"), open(log).read()
+            # undecodable docker output is a note, not a new exception
+            with open(os.path.join(d, "docker"), "w") as fh:
+                fh.write("#!/bin/sh\nprintf '\\377\\376 bad' >&2\nexit 1\n")
+            note = _remove("ab-x")
+            assert "NOT removed" in note and "bad" in note, note   # decoded, not a traceback
         finally:
             AB = real
             os.environ["PATH"] = path

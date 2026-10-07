@@ -267,7 +267,7 @@ def prior_status(path):
                           r["missing_option"])] = r["status"]
     except FileNotFoundError:
         pass
-    return {**seeded, **survey}     # a row present twice: the survey copy's status wins
+    return {**seeded, **survey}     # a row present twice: a non-empty survey status wins
 
 
 def prior_seeded(path):
