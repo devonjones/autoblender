@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render an assembled wall-on-tile: base + floor + wall, placed in tile space.
+"""Render an assembled wall-on-tile: base + floor + wall (or a --parts subset), placed in tile space.
 
 Run from a directory holding base.stl, floor.stl and wall.stl:
 
@@ -39,7 +39,7 @@ p.add_argument("--db-width", type=float, default=0.03, help="pointiness ramp wid
 p.add_argument("--db-break", type=float, default=0.5, help="0 = even highlight, 1 = very patchy")
 p.add_argument("--db-min-z", type=float, default=7.6, help="no drybrush below this world z (floor slab edge)")
 p.add_argument("--fit", type=float, default=1.05, help="bounding-sphere framing; <1 crops")
-p.add_argument("--join", help="also write a manifold union of all three to this STL")
+p.add_argument("--join", help="also write a manifold union of the loaded parts to this STL")
 a = p.parse_args(sys.argv[1:])
 a.parts = [n for n in a.parts.split(",") if n]
 if not a.parts or set(a.parts) - {"base", "floor", "wall"}:

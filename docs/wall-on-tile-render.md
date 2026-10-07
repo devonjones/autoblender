@@ -122,7 +122,7 @@ uploads them to R2 as `guides/guide.<key>.webp`.
 | card | parts | output |
 |---|---|---|
 | wall | the three parts above | `shots/wall-on-tile-drybrush-640.webp` |
-| floor | `dungeon_stone%block#floor.2x2.openforge.stl` as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
+| floor | `dungeon_stone%block#floor.2x2.openforge.stl` (md5 `e1d767845e1862fff3a8dc04e86133c6`) as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
 
 ## Run it
 
