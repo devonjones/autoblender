@@ -1,5 +1,6 @@
 import argparse
 import os
+import traceback
 import sys
 
 from . import out
@@ -131,7 +132,8 @@ def cmd_gn_apply(args):
     with input_stl_path(args.input) as ip, output_stl_path(args.output) as op:
         ops.reset_scene()
         obj = ops.import_stl(ip)
-        ops.apply_geometry_nodes(obj, args.node_group, args.blend, overrides or None)
+        ops.apply_geometry_nodes(obj, args.node_group, args.blend, overrides or None,
+                                 solver=args.solver, nudge_z=args.nudge_z)
         ops.export_stl(obj, op)
 
 
@@ -144,7 +146,8 @@ def cmd_gn_list(args):
         print(f"\n{g['name']}", file=out)
         for s in g["inputs"]:
             d = f"  = {s['default']!r}" if "default" in s else ""
-            print(f"  in   {s['type']:24s} {s['name']}{d}", file=out)
+            items = f"  {{{', '.join(s['items'])}}}" if s.get("items") else ""
+            print(f"  in   {s['type']:24s} {s['name']}{d}{items}", file=out)
         for s in g["outputs"]:
             print(f"  out  {s['type']:24s} {s['name']}", file=out)
     users = ops.list_geometry_node_modifier_users()
@@ -336,9 +339,9 @@ def cmd_bool(args):
                 raise RuntimeError(f"--op expects KIND:NAME, got {spec!r}")
             tool = helper(name)
             if kind == "union":
-                ops.boolean(obj, tool, "UNION")
+                ops.boolean(obj, tool, "UNION", args.solver)
             elif kind == "diff":
-                ops.boolean(obj, tool, "DIFFERENCE")
+                ops.boolean(obj, tool, "DIFFERENCE", args.solver)
             elif kind == "join":
                 ops.join(obj, tool)
                 tool = None
@@ -448,6 +451,8 @@ def main():
                          "for verts already inside it on GATE axes ('-' = no gate); repeatable")
     sp.add_argument("--op", action="append", default=[], metavar="KIND:NAME",
                     help="union:NAME, diff:NAME or join:NAME; applied in order")
+    sp.add_argument("--solver", default="MANIFOLD", choices=["EXACT", "FLOAT", "MANIFOLD"],
+                    help="Boolean solver for union/diff ops (default MANIFOLD)")
     sp.add_argument("--remesh", type=float, metavar="VOXEL")
     sp.add_argument("--decimate", type=float, metavar="RATIO")
     sp.set_defaults(fn=cmd_bool)
@@ -478,13 +483,27 @@ def main():
         metavar="NAME=VALUE",
         help="Override an input socket value; repeatable",
     )
+    sp.add_argument(
+        "--nudge-z", type=float, default=0.0, metavar="MM",
+        help="Shift the piece in z before applying the group. Use a small "
+             "negative value (-0.02) so the OpenForge cut plane bites into solid "
+             "stone instead of grazing the texture and leaving thin flanges.",
+    )
+    sp.add_argument(
+        "--solver",
+        choices=["EXACT", "FLOAT", "MANIFOLD"],
+        help="Override the solver on every Mesh Boolean in the group "
+             "(libraries ship EXACT, which fails on some cores)",
+    )
     sp.set_defaults(fn=cmd_gn_apply)
 
     args = p.parse_args()
     try:
         args.fn(args)
     except Exception as e:
-        print(f"ab: error: {e}", file=sys.stderr)
+        # traceback first, summary last: batch drivers report the final lines
+        traceback.print_exc()
+        print(f"ab: error: {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(1)
 
 

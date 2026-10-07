@@ -1,6 +1,8 @@
 import os
 import re
 
+import sys
+
 import bpy
 from mathutils import Vector
 
@@ -69,6 +71,8 @@ def list_geometry_node_groups():
                 info["default"] = item.default_value
             except AttributeError:
                 pass
+            if item.socket_type == "NodeSocketMenu" and item.in_out == "INPUT":
+                info["items"] = [name for _, name in _menu_items(ng, item.identifier)]
             if item.in_out == "INPUT":
                 inputs.append(info)
             elif item.in_out == "OUTPUT":
@@ -77,7 +81,29 @@ def list_geometry_node_groups():
     return groups
 
 
-def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None):
+def _set_boolean_solver(ng, solver, seen=None):
+    """Override the solver on every Mesh Boolean in a tree, nested groups included.
+
+    Libraries ship these set to EXACT, which fails hard on some cores -- it
+    returned a 162-poly sliver for dungeon_stone wall.D with side locks, where
+    MANIFOLD and FLOAT both produced the correct 310k-poly wall.
+    """
+    seen = seen if seen is not None else set()
+    if ng.name in seen:
+        return 0
+    seen.add(ng.name)
+    n = 0
+    for node in ng.nodes:
+        if node.bl_idname == "GeometryNodeMeshBoolean":
+            node.solver = solver
+            n += 1
+        elif node.type == "GROUP" and node.node_tree:
+            n += _set_boolean_solver(node.node_tree, solver, seen)
+    return n
+
+
+def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None, solver=None,
+                         nudge_z=0.0):
     ng = bpy.data.node_groups.get(node_group_name)
     if ng is None:
         with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
@@ -89,6 +115,35 @@ def apply_geometry_nodes(obj, node_group_name, blend_path, inputs=None):
         ng = bpy.data.node_groups.get(node_group_name)
         if ng is None:
             raise RuntimeError(f"failed to load node group {node_group_name!r}")
+
+    if solver:
+        n = _set_boolean_solver(ng, solver)
+        if n == 0:
+            # the caller asked for a solver and got none of it: the group would
+            # run on whatever the library shipped (historically EXACT, which
+            # collapsed wall.D to a 162-poly sliver).  Too quiet to be an info
+            # line.
+            print(f"# gn: WARNING --solver {solver} matched no Mesh Boolean node in "
+                  f"{node_group_name!r}; the library's own solver is in effect",
+                  file=sys.stderr)
+        else:
+            print(f"# gn: boolean solver -> {solver} on {n} node(s)")
+
+    if nudge_z:
+        # The OpenForge cut plane sits at the base height.  Where the stone
+        # texture is tangent to it the cut leaves paper-thin flanges instead of
+        # a clean face, so drop the piece slightly and let the plane bite into
+        # solid material.
+        #
+        # This MUST go into the mesh data, not obj.location: a geometry nodes
+        # modifier evaluates in the object's local space, so moving the object
+        # leaves the geometry exactly where the group's cut plane expects it and
+        # the nudge does nothing at all.
+        from mathutils import Matrix
+        obj.data.transform(Matrix.Translation((0.0, 0.0, nudge_z)))
+        obj.data.update()
+        bpy.context.view_layer.update()
+        print(f"# gn: nudged mesh {nudge_z:+.3f} in z before the cut")
 
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new("GeometryNodes", "NODES")
@@ -516,13 +571,18 @@ def clamp_to(obj, target, axes="X", gate_axes=None):
     return moved
 
 
-def boolean(obj, target, operation):
+def boolean(obj, target, operation, solver="MANIFOLD"):
     bpy.context.view_layer.objects.active = obj
+    mod = _boolean_modifier(obj, target, operation, solver)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def _boolean_modifier(obj, target, operation, solver):
     mod = obj.modifiers.new("Boolean", "BOOLEAN")
     mod.operation = operation
     mod.object = target
-    mod.solver = "EXACT"
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    mod.solver = solver
+    return mod
 
 
 def join(obj, target):
@@ -536,3 +596,113 @@ def join(obj, target):
 def drop(obj):
     if obj.name in bpy.data.objects:
         bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def _selfcheck():
+    """Run inside the image: `python -m autoblender.ops`.
+
+    Covers the solver override (recursive, and wired through boolean() and
+    apply_geometry_nodes) and the invariant that `nudge_z` moves MESH DATA
+    rather than the object transform.
+    """
+    import bpy
+
+    def tree(name):
+        ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        ng.interface.new_socket("Geometry", in_out="INPUT",
+                                socket_type="NodeSocketGeometry")
+        ng.interface.new_socket("Geometry", in_out="OUTPUT",
+                                socket_type="NodeSocketGeometry")
+        gi, go = ng.nodes.new("NodeGroupInput"), ng.nodes.new("NodeGroupOutput")
+        ng.links.new(gi.outputs[0], go.inputs[0])
+        return ng
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    # --- _set_boolean_solver -------------------------------------------------
+    # A diamond: the SAME nested group referenced twice.  Without the `seen`
+    # guard its boolean is counted (and re-set) twice; worse, a genuine cycle
+    # would recurse forever.  3 booleans, not 4.
+    inner = tree("inner")
+    inner.nodes.new("GeometryNodeMeshBoolean")
+    outer = tree("outer")
+    outer.nodes.new("GeometryNodeMeshBoolean")
+    outer.nodes.new("GeometryNodeMeshBoolean")
+    for _ in range(2):
+        n = outer.nodes.new("GeometryNodeGroup")
+        n.node_tree = inner
+
+    assert _set_boolean_solver(outer, "MANIFOLD") == 3, "diamond counted twice"
+    for ng in (inner, outer):
+        for node in ng.nodes:
+            if node.bl_idname == "GeometryNodeMeshBoolean":
+                assert node.solver == "MANIFOLD", (ng.name, node.name, node.solver)
+    # a group already visited contributes nothing -- this is the cycle guard
+    assert _set_boolean_solver(outer, "EXACT", seen={outer.name}) == 0
+
+    # --- nudge_z -------------------------------------------------------------
+    # The whole point: a geometry nodes modifier evaluates in the object's LOCAL
+    # space, so nudging obj.location is a silent no-op that still prints its
+    # success line.  Assert the vertices moved and the transform did not.
+    tree("passthrough")          # looked up by name below
+    mesh = bpy.data.meshes.new("m")
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+    mesh.update()
+    obj = bpy.data.objects.new("o", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+
+    before_loc = tuple(obj.location)
+    before_z = [v.co.z for v in obj.data.vertices]
+    apply_geometry_nodes(obj, "passthrough", "/nonexistent.blend", nudge_z=-0.02)
+    after_z = [v.co.z for v in obj.data.vertices]
+
+    assert tuple(obj.location) == before_loc, "nudge_z moved the OBJECT, not the mesh"
+    assert all(abs((a - b) - -0.02) < 1e-6 for a, b in zip(after_z, before_z)), \
+        f"mesh data did not move by the nudge: {before_z} -> {after_z}"
+
+    # --- solver plumbing ----------------------------------------------------
+    # boolean() must apply the solver it is given, not a hardcoded one
+    global _boolean_modifier
+    real, seen = _boolean_modifier, []
+
+    def recording(*args):
+        mod = real(*args)
+        seen.append(mod.solver)
+        return mod
+    _boolean_modifier = recording
+    try:
+        for solver in ("EXACT", "FLOAT", "MANIFOLD"):
+            bpy.ops.mesh.primitive_cube_add(size=2)
+            a = bpy.context.active_object
+            bpy.ops.mesh.primitive_cube_add(size=2, location=(1, 0, 0))
+            b = bpy.context.active_object
+            boolean(a, b, "UNION", solver)
+            assert seen[-1] == solver, (solver, seen)
+            assert not a.modifiers, "boolean() left its modifier unapplied"
+            drop(b)
+            drop(a)
+    finally:
+        _boolean_modifier = real
+
+    # apply_geometry_nodes(solver=...) reaches the group's booleans, and says so
+    # loudly when there are none to reach
+    import contextlib
+    import io
+    withbool = tree("withbool")
+    withbool.nodes.new("GeometryNodeMeshBoolean")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+        apply_geometry_nodes(obj, "withbool", "/nonexistent.blend", solver="FLOAT")
+    assert "solver -> FLOAT on 1" in err.getvalue(), err.getvalue()
+    assert all(n.solver == "FLOAT" for n in withbool.nodes
+               if n.bl_idname == "GeometryNodeMeshBoolean")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+        apply_geometry_nodes(obj, "passthrough", "/nonexistent.blend", solver="FLOAT")
+    assert "WARNING --solver FLOAT matched no Mesh Boolean" in err.getvalue(), err.getvalue()
+
+    print("ops selfcheck ok")
+
+
+if __name__ == "__main__":
+    _selfcheck()
