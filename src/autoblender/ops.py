@@ -560,12 +560,12 @@ def clamp_to(obj, target, axes="X", gate_axes=None):
     return moved
 
 
-def boolean(obj, target, operation):
+def boolean(obj, target, operation, solver="MANIFOLD"):
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new("Boolean", "BOOLEAN")
     mod.operation = operation
     mod.object = target
-    mod.solver = "EXACT"
+    mod.solver = solver
     bpy.ops.object.modifier_apply(modifier=mod.name)
 
 
@@ -580,3 +580,73 @@ def join(obj, target):
 def drop(obj):
     if obj.name in bpy.data.objects:
         bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def _selfcheck():
+    """Run inside the image: `python -m autoblender.ops`.
+
+    Covers the two things in this module with no other check on them: the
+    recursive solver override, and the invariant that `nudge_z` moves MESH DATA
+    rather than the object transform.
+    """
+    import bpy
+    from mathutils import Matrix
+
+    def tree(name):
+        ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        ng.interface.new_socket("Geometry", in_out="INPUT",
+                                socket_type="NodeSocketGeometry")
+        ng.interface.new_socket("Geometry", in_out="OUTPUT",
+                                socket_type="NodeSocketGeometry")
+        gi, go = ng.nodes.new("NodeGroupInput"), ng.nodes.new("NodeGroupOutput")
+        ng.links.new(gi.outputs[0], go.inputs[0])
+        return ng
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    # --- _set_boolean_solver -------------------------------------------------
+    # A diamond: the SAME nested group referenced twice.  Without the `seen`
+    # guard its boolean is counted (and re-set) twice; worse, a genuine cycle
+    # would recurse forever.  3 booleans, not 4.
+    inner = tree("inner")
+    inner.nodes.new("GeometryNodeMeshBoolean")
+    outer = tree("outer")
+    outer.nodes.new("GeometryNodeMeshBoolean")
+    outer.nodes.new("GeometryNodeMeshBoolean")
+    for _ in range(2):
+        n = outer.nodes.new("GeometryNodeGroup")
+        n.node_tree = inner
+
+    assert _set_boolean_solver(outer, "MANIFOLD") == 3, "diamond counted twice"
+    for ng in (inner, outer):
+        for node in ng.nodes:
+            if node.bl_idname == "GeometryNodeMeshBoolean":
+                assert node.solver == "MANIFOLD", (ng.name, node.name, node.solver)
+    # a group already visited contributes nothing -- this is the cycle guard
+    assert _set_boolean_solver(outer, "EXACT", seen={outer.name}) == 0
+
+    # --- nudge_z -------------------------------------------------------------
+    # The whole point: a geometry nodes modifier evaluates in the object's LOCAL
+    # space, so nudging obj.location is a silent no-op that still prints its
+    # success line.  Assert the vertices moved and the transform did not.
+    passthrough = tree("passthrough")
+    mesh = bpy.data.meshes.new("m")
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+    mesh.update()
+    obj = bpy.data.objects.new("o", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+
+    before_loc = tuple(obj.location)
+    before_z = [v.co.z for v in obj.data.vertices]
+    apply_geometry_nodes(obj, "passthrough", "/nonexistent.blend", nudge_z=-0.02)
+    after_z = [v.co.z for v in obj.data.vertices]
+
+    assert tuple(obj.location) == before_loc, "nudge_z moved the OBJECT, not the mesh"
+    assert all(abs((a - b) - -0.02) < 1e-6 for a, b in zip(after_z, before_z)), \
+        f"mesh data did not move by the nudge: {before_z} -> {after_z}"
+
+    print("ops selfcheck ok")
+
+
+if __name__ == "__main__":
+    _selfcheck()

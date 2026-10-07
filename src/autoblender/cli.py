@@ -338,9 +338,9 @@ def cmd_bool(args):
                 raise RuntimeError(f"--op expects KIND:NAME, got {spec!r}")
             tool = helper(name)
             if kind == "union":
-                ops.boolean(obj, tool, "UNION")
+                ops.boolean(obj, tool, "UNION", args.solver)
             elif kind == "diff":
-                ops.boolean(obj, tool, "DIFFERENCE")
+                ops.boolean(obj, tool, "DIFFERENCE", args.solver)
             elif kind == "join":
                 ops.join(obj, tool)
                 tool = None
@@ -450,6 +450,8 @@ def main():
                          "for verts already inside it on GATE axes ('-' = no gate); repeatable")
     sp.add_argument("--op", action="append", default=[], metavar="KIND:NAME",
                     help="union:NAME, diff:NAME or join:NAME; applied in order")
+    sp.add_argument("--solver", default="MANIFOLD", choices=["EXACT", "FLOAT", "MANIFOLD"],
+                    help="Boolean solver for union/diff ops (default MANIFOLD)")
     sp.add_argument("--remesh", type=float, metavar="VOXEL")
     sp.add_argument("--decimate", type=float, metavar="RATIO")
     sp.set_defaults(fn=cmd_bool)
