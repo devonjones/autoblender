@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Render an assembled wall-on-tile: base + floor + wall (or a --parts subset), placed in tile space.
+"""Render an assembled wall-on-tile: base + floor + wall (or a --parts subset, plus any
+--add parts such as corner wings), placed in tile space.
 
 Run from a directory holding base.stl, floor.stl and wall.stl:
 
@@ -8,8 +9,8 @@ Run from a directory holding base.stl, floor.stl and wall.stl:
 Tile space: base footprint (0,0)-(50.8,50.8), base top at z=6. The floor
 (authored 50.8 x 38.1 at y 12.7..50.8, z 0) leaves a 12.7mm strip at y<12.7
 for the wall (authored centred on the origin, z from 6). --wall/--floor/--base
-are the placements, not deltas. The assembly is spun 180 degrees so the wall
-stands at the back. See docs/wall-on-tile-render.md.
+are the placements, not deltas. --spin (default 180) turns the assembly so the
+wall stands at the back. See docs/wall-on-tile-render.md.
 """
 import argparse, math, os, sys
 import bpy
@@ -47,6 +48,26 @@ a = p.parse_args(sys.argv[1:])
 a.parts = [n for n in a.parts.split(",") if n]
 if not a.parts or set(a.parts) - {"base", "floor", "wall"}:
     p.error(f"--parts takes base, floor and/or wall; got {','.join(a.parts) or 'nothing'}")
+
+
+def place(flag, spec):
+    """x,y,z[,rotz] -> (x, y, z, rotz) floats, or a usage error naming the flag."""
+    try:
+        v = [float(t) for t in spec.split(",")]
+    except ValueError:
+        v = []
+    if len(v) not in (3, 4):
+        p.error(f"{flag} takes x,y,z[,rotz]; got {spec!r}")
+    return (*v, 0.0)[:4]
+
+
+placed = [(n, place(f"--{n}", getattr(a, n)), n != "base") for n in ("base", "floor", "wall")
+          if n in a.parts]
+for spec in a.add:
+    name, _, off = spec.partition(":")
+    if not name or name in [n for n, *_ in placed]:
+        p.error(f"--add needs a new part name: {spec!r} clashes or has none")
+    placed.append((name, place("--add", off), True))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -164,16 +185,12 @@ def stone(name, brush=True):
 spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.radians(a.spin), 4, "Z")
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
-placed = [(n, off, n != "base") for n, off in
-          (("base", a.base), ("floor", a.floor), ("wall", a.wall)) if n in a.parts]
-placed += [(*x.split(":", 1), True) for x in a.add]
-for name, off, brush in placed:
+for name, (x, y, z, rotz), brush in placed:
     mat = stone(name, brush=brush)
     o = import_stl(f"{name}.stl")
     o.name = name
-    x, y, z, *r = (float(v) for v in off.split(","))
     o.matrix_world = (spin @ Matrix.Translation((x, y, z))
-                      @ Matrix.Rotation(math.radians(r[0] if r else 0), 4, "Z"))
+                      @ Matrix.Rotation(math.radians(rotz), 4, "Z"))
     o.data.materials.append(mat)
     parts[name] = o
 bpy.context.view_layer.update()

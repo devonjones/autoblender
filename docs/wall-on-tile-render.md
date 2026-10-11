@@ -25,8 +25,8 @@ them as `wall.stl`, `floor.stl` and `base.stl`. The script reads those names fro
 current directory.
 
 For a different build, ask the openforge-catalog session to resolve another set of answers.
-The script only knows the three roles, so a different size or layout also needs new placement
-numbers (see below).
+A different size or layout also needs new placement numbers (see below); extra parts go in
+with `--add`.
 
 ## Placement
 
@@ -44,8 +44,8 @@ base plane. Measured with trimesh/manifold3d slices:
   sits on the frame next to the floor.
 - **The short side of the floor faces the wall.** The floor's half-depth row of flagstones
   is along y=12.7, so it runs right along the wall. Check with `--top`.
-- The assembly is rotated 180° about the tile centre so the wall stands at the back, away
-  from the camera.
+- The assembly is rotated 180° (the `--spin` default) about the tile centre so the wall
+  stands at the back, away from the camera.
 - **Joining is optional.** `--join out.stl` merges all three in one manifold3d union:
   42,491 mm³ against 42,508 mm³ for the separate parts, so only about 17 mm³ overlaps at the
   seams. The result is 387k triangles. Rendering keeps them as separate objects, which
@@ -125,7 +125,17 @@ uploads them to R2 as `guides/guide.<key>.webp`.
 |---|---|---|
 | wall | the three parts above | `shots/wall-on-tile-drybrush-640.webp` |
 | floor | `dungeon_stone%block#floor.2x2.openforge.stl` (md5 `e1d767845e1862fff3a8dc04e86133c6`) as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
-| corner | 2x2 `openlock+unsupported,magnetic+flex` base (md5 `ef4e67dc…`) and the `dungeon_stone/s2w/corner/` floor, left and right wings and `col+L` column, staged as `base`/`floor`/`left`/`right`/`col.stl`; `--parts base,floor --add left:31.62,-8.81,0 --add right:-23.84,31.61,0,270 --add col:-8.45,6.55,0 --spin 270` (corner at back left, so the default camera and lights look into it) | `shots/corner-on-tile-drybrush-640.webp` |
+| corner | see below | `shots/corner-on-tile-drybrush-640.webp` |
+
+The corner card stages the 2x2 `openlock+unsupported,magnetic+flex` base (md5
+`ef4e67dc3999f9d5d8ad5553cdb6a142`) and the `dungeon_stone/s2w/corner/` floor, left and
+right wings and `col+L` column as `base`/`floor`/`left`/`right`/`col.stl`. `--spin 270`
+puts the corner at the back left, so the default camera and lights look into it:
+
+```
+--parts base,floor --add left:31.62,-8.81,0 --add right:-23.84,31.61,0,270 \
+    --add col:-8.45,6.55,0 --spin 270
+```
 
 ## Run it
 
