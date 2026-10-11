@@ -23,6 +23,9 @@ p.add_argument("--wall", default="25.4,6.35,0")
 p.add_argument("--floor", default="0,0,6.0")
 p.add_argument("--base", default="0,0,0")
 p.add_argument("--parts", default="base,floor,wall", help="which of base,floor,wall to load, e.g. base,floor for a floor-only shot")
+p.add_argument("--add", action="append", default=[], metavar="NAME:X,Y,Z[,ROTZ]",
+               help="extra drybrushed part NAME.stl, turned ROTZ degrees about its origin then moved; repeatable")
+p.add_argument("--spin", type=float, default=180.0, help="turn the assembly about the tile centre; 180 puts the wall at the back")
 p.add_argument("--yaw", type=float, default=28.0)
 p.add_argument("--pitch", type=float, default=24.0)
 p.add_argument("--top", action="store_true", help="orthographic straight-down view")
@@ -44,7 +47,6 @@ a = p.parse_args(sys.argv[1:])
 a.parts = [n for n in a.parts.split(",") if n]
 if not a.parts or set(a.parts) - {"base", "floor", "wall"}:
     p.error(f"--parts takes base, floor and/or wall; got {','.join(a.parts) or 'nothing'}")
-vec = lambda s: Vector(tuple(float(v) for v in s.split(",")))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -158,18 +160,20 @@ def stone(name, brush=True):
     return m
 
 
-# spin 180 about the tile centre so the wall (tile y<12.7) ends up at the back
-spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.pi, 4, "Z")
+# --spin about the tile centre; the default 180 puts the wall (tile y<12.7) at the back
+spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.radians(a.spin), 4, "Z")
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
-for name, off, brush in (("base", a.base, False), ("floor", a.floor, True),
-                         ("wall", a.wall, True)):
-    if name not in a.parts:
-        continue
+placed = [(n, off, n != "base") for n, off in
+          (("base", a.base), ("floor", a.floor), ("wall", a.wall)) if n in a.parts]
+placed += [(*x.split(":", 1), True) for x in a.add]
+for name, off, brush in placed:
     mat = stone(name, brush=brush)
     o = import_stl(f"{name}.stl")
     o.name = name
-    o.matrix_world = spin @ Matrix.Translation(vec(off))
+    x, y, z, *r = (float(v) for v in off.split(","))
+    o.matrix_world = (spin @ Matrix.Translation((x, y, z))
+                      @ Matrix.Rotation(math.radians(r[0] if r else 0), 4, "Z"))
     o.data.materials.append(mat)
     parts[name] = o
 bpy.context.view_layer.update()

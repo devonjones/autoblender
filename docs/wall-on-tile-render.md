@@ -89,6 +89,8 @@ The defaults are the settings you approved (v05 in the session):
 | `--top` | off | orthographic view straight down |
 | `--wall` / `--floor` / `--base` | see placement | x,y,z position of each part |
 | `--parts` | base,floor,wall | which parts to load; `base,floor` for a floor-only shot |
+| `--spin` | 180 | degrees to turn the assembly about the tile centre; turn the model, not `--yaw`, since the lights don't follow the camera |
+| `--add` | none | `NAME:x,y,z[,rotz]`, repeatable: load `NAME.stl` drybrushed, turned about its own origin, then moved |
 | `--samples` / `--res` | 24 / 1000 | 24 is a preview; use 256 for the final render |
 
 ## Drybrush look (optional)
@@ -123,6 +125,7 @@ uploads them to R2 as `guides/guide.<key>.webp`.
 |---|---|---|
 | wall | the three parts above | `shots/wall-on-tile-drybrush-640.webp` |
 | floor | `dungeon_stone%block#floor.2x2.openforge.stl` (md5 `e1d767845e1862fff3a8dc04e86133c6`) as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
+| corner | 2x2 `openlock+unsupported,magnetic+flex` base (md5 `ef4e67dc…`) and the `dungeon_stone/s2w/corner/` floor, left and right wings and `col+L` column, staged as `base`/`floor`/`left`/`right`/`col.stl`; `--parts base,floor --add left:31.62,-8.81,0 --add right:-23.84,31.61,0,270 --add col:-8.45,6.55,0 --spin 270` (corner at back left, so the default camera and lights look into it) | `shots/corner-on-tile-drybrush-640.webp` |
 
 ## Run it
 
