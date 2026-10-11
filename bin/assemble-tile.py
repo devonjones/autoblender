@@ -48,6 +48,8 @@ a = p.parse_args(sys.argv[1:])
 a.parts = [n for n in a.parts.split(",") if n]
 if not a.parts or set(a.parts) - {"base", "floor", "wall"}:
     p.error(f"--parts takes base, floor and/or wall; got {','.join(a.parts) or 'nothing'}")
+if not math.isfinite(a.spin):
+    p.error(f"--spin takes a finite angle; got {a.spin}")
 
 
 def place(flag, spec):
@@ -56,7 +58,7 @@ def place(flag, spec):
         v = [float(t) for t in spec.split(",")]
     except ValueError:
         v = []
-    if len(v) not in (3, 4):
+    if len(v) not in (3, 4) or not all(map(math.isfinite, v)):
         p.error(f"{flag} takes x,y,z[,rotz]; got {spec!r}")
     return (*v, 0.0)[:4]
 
@@ -67,7 +69,7 @@ for spec in a.add:
     name, _, off = spec.partition(":")
     if not name or name in [n for n, *_ in placed]:
         p.error(f"--add needs a new part name: {spec!r} clashes or has none")
-    placed.append((name, place("--add", off), True))
+    placed.append((name, place(f"--add {name}", off), True))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
