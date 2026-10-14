@@ -1,39 +1,35 @@
 # dead-code-reviewer
+model: sonnet
+verification: evidence-query — `git grep -nw <symbol>` across the repo (and the bare string for getattr/importlib), with the hit count.
 **Checks:** unused module-level symbols, commented-out code, partial refactors leaving the old name, `pass`-only stubs.
-**Spawn when:** PR touches `*.py`, especially when it removes call sites or moves code. Skip for pure additive changes.
-**Contents:** What to flag: Unused module-level functions, classes, constants; Unused exported names; Unused fixtures in `conftest.py`; Commented-out code; Partial refactors; Stale `__all__` entries; Unused parameters with default values; `if False; `def f() · Review approach · Do NOT flag
+**Spawn when:** PR adds, removes, renames or moves a `def`, `class` or module-level name in `*.py`, or adds commented-out code. Skip diffs with no `.py` changes.
+**Contents:** What to flag: unused module-level names; unused exports; commented-out code; partial refactors; stale `__all__`; unused defaulted params; constant-false branches; pass-only stubs · Review approach · Do NOT flag
 
----
+**Severity:** P3; a partial refactor leaving a callable old name: P2.
 
-
-Review PRs for **dead code introduction**. Python's runtime has no compile-time check for unused symbols. `vulture` and `ruff` (`F401` unused imports, `F841` unused variables) catch most cases; this reviewer fills the gaps — especially around public APIs, reflection-driven code, and partial refactors.
+Review PRs for **dead code introduction**. `ruff` (`F401`, `F841`) catches unused imports and variables; this reviewer fills the gaps — reflection-driven code and partial refactors.
 
 **What to flag:**
 
-1. **Unused module-level functions, classes, constants** that nothing in the package references.
-2. **Unused exported names** in a package's `__init__.py` that nothing imports (verify by grepping the whole workspace).
-3. **Unused fixtures in `conftest.py`** that no test references.
-4. **Commented-out code** — delete; git history preserves it.
-5. **Partial refactors** — old function name still defined after every call site moved to a new name.
-6. **Stale `__all__` entries** referring to names that no longer exist (these `AttributeError` at import time when consumed).
-7. **Unused parameters with default values** (especially after a refactor that stopped passing them).
-8. **`if False:` / `if True:` / `if 0:` dead branches** — these typically appear in code that's been partially commented out as a refactor scaffold. Delete the branch; git history preserves it.
-9. **`def f(): pass` stubs with no implementation and no callers.** Either should be `@abstractmethod` on an ABC (and implemented in subclasses) or removed. A `pass`-only function that's never called is dead weight; a `pass`-only function that's called silently no-ops without telling anyone.
+1. **Unused module-level functions, classes, constants** that nothing in the repo references.
+2. **Unused exported names** in `__init__.py` that nothing imports.
+3. **Commented-out code** — delete; git history preserves it.
+4. **Partial refactors** — old function name still defined after every call site moved to a new name.
+5. **Stale `__all__` entries** referring to names that no longer exist.
+6. **Unused parameters with default values** (especially after a refactor that stopped passing them).
+7. **`if False:` / `if True:` / `if 0:` dead branches.**
+8. **`def f(): pass` stubs with no implementation and no callers.**
 
 **Review approach:**
 
-1. For each new/modified file, check: did the PR remove call sites without removing the called function?
-2. For renamed/moved functions, check: is the old name still defined somewhere?
-3. For removed features, check: are all supporting helpers and constants also removed?
-4. Grep the workspace for each flagged symbol to confirm it's truly unreferenced. Include the grep result in the comment so the author can verify.
+1. Did the PR remove call sites without removing the called function?
+2. For renamed/moved functions: is the old name still defined?
+3. For removed features: are the supporting helpers and constants also removed?
+4. Grep the repo for each flagged symbol and include the result in the finding.
 
 **Do NOT flag:**
 
-- **Reflection-driven code**: SQLAlchemy mapped columns, Pydantic model fields, Click command callbacks (decorator side-effects), pytest fixtures (discovered by name), marshmallow schemas. These look unused but aren't.
-- Code referenced only via `getattr` / `hasattr` / `importlib.import_module` (search for the bare string, not just the symbol).
-- Public API functions/classes with no internal callers (they may be called by external packages — verify against the package's documented surface or `__all__`).
-- `__init__.py` re-exports that look unused but are part of the package's documented public surface.
-- Test helpers discovered automatically (`conftest.py` fixtures used implicitly via name).
-- Build-tag-gated or platform-specific code (e.g., `if sys.platform == "win32":` branches).
-
-**Tooling cross-reference:** `vulture` catches most of this; assume CI runs it. This reviewer focuses on what vulture misses — public APIs, reflection-driven code (vulture's whitelist mechanism handles some of this if configured), and partial refactors that vulture sees as "still has callers" because the call site is in the same PR.
+- Names used by reflection: `PROCESSES` entries and their option parameters in `api.py` (`inspect`), `_LazyOps` attribute dispatch in `cli.py`, functions called from `bin/*.py` by name.
+- Code referenced only via `getattr` / `hasattr` / `importlib.import_module` (search for the bare string).
+- `_selfcheck()` and its `_check_*` helpers.
+- Platform-specific branches (`if sys.platform == "win32":`).

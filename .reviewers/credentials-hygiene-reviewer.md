@@ -1,10 +1,9 @@
 # credentials-hygiene-reviewer
+model: sonnet
+verification: evidence-query — quotes the literal, and runs `git check-ignore -v` / reads `.dockerignore` for the artifact path.
 **Checks:** literal secrets committed (P1), credential files or key-bearing zips/`.env` in the diff or image (P1), keys in URLs, keys echoed to output, key persistence outside Secrets Manager.
 **Spawn when:** PR touches auth/key code (`api.py`, `bin/package-stl-tools`, `bin/stl-tools.ps1`), `.gitignore`/`.dockerignore`, the Dockerfile, or tofu secrets. Cheap — when in doubt, spawn it.
 **Contents:** What to flag: Literal secrets in code or config; OAuth artifacts committed; Secrets in URLs; Secrets echoed to output; Insecure storage of tokens the tool persists; Test fixtures with realistic-looking credentials; New env var credentials without documentation · Do NOT flag · Review approach
-
----
-
 
 Review PRs for **secrets and credential handling**. This repo deploys to AWS and guards one shared secret: the STL Tools API key, stored in Secrets Manager (minted by `bin/package-stl-tools`) and shipped to the client inside a gitignored zip as `.env`. Credentials live in Secrets Manager or the environment and must never enter the repo, the image, its logs, or its test data.
 
@@ -16,7 +15,7 @@ Review PRs for **secrets and credential handling**. This repo deploys to AWS and
 
 3. **Secrets in URLs (P2):** tokens as query parameters (`?access_token=...`, `?token=...`) in code when a header alternative exists. URLs land in server logs, browser history, and proxies. Runtime-only exceptions (an API that *requires* a URL token) must confine the URL construction to one place and never log the assembled URL.
 
-4. **Secrets echoed to output (P1):** tokens in exception messages, `print()` diagnostics, CLI output, or assertion messages. (Log-call interpolation is `logging-reviewer`'s beat — this covers the non-logging leak paths.) Also flag debug endpoints or CLI flags that dump full config including credentials.
+4. **Secrets echoed to output (P1):** tokens in exception messages, `print()` diagnostics, CLI output, or assertion messages. Also flag debug endpoints or CLI flags that dump full config including credentials.
 
 5. **Insecure storage of tokens the tool persists (P2):** `bin/package-stl-tools` writes the API key into a `.env` inside `dist/`. Flag: tokens written into the repo tree, into fixture files, into world-readable paths, or into files not covered by `.gitignore`. Acceptable: env files outside the repo, `~/.config`-style dotfiles with `0600`-style expectations, OS keyring.
 

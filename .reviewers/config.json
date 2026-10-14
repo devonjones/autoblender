@@ -1,10 +1,4 @@
 {
-  "overlap_acknowledged": {
-    "general-reviewer": {
-      "overlaps_with": "code-reviewer",
-      "reason": "Both read the whole diff, but the beats differ: code-reviewer audits CLAUDE.md compliance with a quote-the-exact-rule forcing function, general-reviewer stands in for the absent Gemini/Cursor bot pass (logic correctness verified empirically, design soundness, contract fidelity, docs accuracy). Keeping both is deliberate."
-    }
-  },
   "bots": {
     "gemini": false,
     "cursor": false

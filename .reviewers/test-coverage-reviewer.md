@@ -1,148 +1,47 @@
 # test-coverage-reviewer
+model: sonnet
+verification: mutation — breaks the touched logic in a scratch copy (never the working tree) and runs the module selfcheck in the image; a selfcheck that still passes is the finding.
 **Checks:** every touched function with non-trivial logic is exercised by a module `_selfcheck()` (this repo's convention; no pytest), the check actually fails when the logic breaks, bug fixes get a regression assertion.
 **Spawn when:** PR modifies `src/autoblender/*.py` outside pure CLI wiring. Skip for docs / tofu / Dockerfile-only diffs.
-**Contents:** Core rule: Code touched by a PR must be covered by tests. Either the coverage already exists, or this PR adds it. · Rules to enforce: Coverage required for all touched code; Refactors preserve coverage, not duplicate it; New behavior needs new assertions; Test file naming and structure; Bug fix documentation · Integration tests as coverage — acceptable boundary · Test quality patterns to flag (P2): `mock.patch` at point-of-definition instead of point-of-use; Mocking what you don't own; Over-mocking; `@pytest.mark.skip` without `reason=`; Tests that don't assert anything · Review approach · What to flag · Do NOT allow · Acceptable exceptions (each requires a beads ticket created before merge)
+**Contents:** Core rule · Rules to enforce: Coverage required for all touched code; Refactors preserve coverage; New behavior needs new assertions; The selfcheck convention; Bug fix regression · Glue code · Selfcheck that cannot fail · Review approach · What to flag · Do NOT allow · Acceptable exceptions
 
----
+**Severity:** P2.
 
-
-Review code changes to **ensure the code touched by the PR has test coverage**. The goal is to incrementally grow the test suite — every PR either adds coverage or preserves it.
-
-**Core rule: Code touched by a PR must be covered by tests. Either the coverage already exists, or this PR adds it.**
-
-The unit of obligation is *coverage of the touched code*, not *net-new test functions for every diff*. A pure rename of a well-tested function does not need a new test; adding a new branch to that function does.
+**Core rule: code touched by a PR must be covered. Either the coverage already exists, or this PR adds it.** The unit of obligation is coverage of the touched code, not net-new checks for every diff: a pure rename of a covered function needs nothing; a new branch in it does.
 
 **Rules to enforce:**
 
-1. **Coverage required for all touched code.** For any modified or new function/method, verify that *some* test exercises it — existing or new. If the function is uncovered today, this PR adds coverage. Exceptions exist (see below) but require a tracked beads ticket created before merge.
+1. **Coverage required for all touched code.** For any modified or new function, verify that some selfcheck exercises it. If it is uncovered today, this PR adds coverage, or files a beads ticket before merge.
+2. **Refactors preserve coverage.** Pure refactors need no new assertions if existing selfchecks still exercise the code and pass. Flag a refactor only when the touched code was uncovered before it.
+3. **New behavior needs new assertions.** A new branch, exception path, or output shape in an already-covered function needs an assertion that hits it.
+4. **The selfcheck convention.** There is no pytest and no `tests/`. Each module with non-trivial logic has a `_selfcheck()` under `if __name__ == "__main__":` (`union.py`, `cut.py`, `api.py`, `ops.py`), run as `python -m autoblender.<module>` inside the image. A pure function's selfcheck asserts on synthetic inputs (trimesh primitives, fake file lists). Valid coverage is an `assert` inside a module `_selfcheck()` (or a `_check_*` helper it calls) that exercises the touched function.
+5. **Bug fix regression.** A fix needs an assertion that would have failed before it, and a commit message or comment saying what was broken.
 
-2. **Refactors preserve coverage, not duplicate it.** Pure refactors (rename, extract-function, signature reshape with no behavior change) do not need net-new tests if existing tests still exercise the refactored code and stay green. Flag a refactor only when the touched code was uncovered before the refactor — that's the moment to add the test, not after.
+**Glue code:** a function with no branching logic (a CLI subcommand that parses args and calls one function) is covered by the selfcheck of what it calls. Code with its own branching, validation, or parsing is not.
 
-3. **New behavior needs new assertions.** Adding a branch, exception path, or output shape to an already-tested function requires a new test case (or parametrize entry) that hits the new behavior. Reusing the existing test name without new assertions is not coverage.
-
-4. **Test file naming and structure.** This repo has no pytest suite. The convention is a `_selfcheck()` function under `if __name__ == "__main__":` in each module with non-trivial logic (see `union.py`, `cut.py`, `api.py`), run as `python -m autoblender.<module>` inside the image. A pure function's selfcheck asserts on synthetic inputs (trimesh primitives, fake file lists); the check must actually fail if the logic breaks. Recognize as valid coverage:
-   - `assert` statements inside a module `_selfcheck()` that exercise the touched function
-   - Top-level `def test_*(...)` functions
-   - `class Test...:` test classes with `def test_*` methods
-   - `@pytest.mark.parametrize` parametrized tests (each parameter set counts as a distinct test case)
-   - Async tests via `@pytest.mark.asyncio` or `pytest-asyncio` auto mode
-   - `@pytest.mark.parametrize` indirect-via-fixture forms (still counts)
-   - Doctest blocks if `--doctest-modules` runs in CI
-   - Fixtures in `conftest.py` are infrastructure, not tests — verify they're consumed by an actual `test_*` function
-
-5. **Bug fix documentation.** If the change fixes a bug:
-   - Require a comment or commit message explaining what was broken and why the fix works.
-   - Require a regression test that would have failed before the fix.
-
-**Integration tests as coverage — acceptable boundary:**
-
-Integration tests count as coverage when the unit boundary is **glue code with no branching logic** — e.g., a Click command that parses args and calls one function, or a Flask route that decodes JSON and dispatches to a service. Demanding a separate unit test for such glue produces low-value mock-heavy tests.
-
-Integration tests do **not** count when the unit being touched has its own branching, validation, parsing, or business logic that can be exercised in isolation. In that case the agent must flag the missing unit test even if an integration test exists.
-
-**Test quality patterns to flag (P2):**
-
-Beyond coverage existence, the reviewer also flags tests whose behavior is broken or weak. These are P2 — the PR is salvageable with a same-cycle fix.
-
-1. **`mock.patch` at point-of-definition instead of point-of-use:**
-
-   ```python
-   # In mypkg/module.py
-   import os
-   def check(path):
-       return os.path.exists(path)
-
-   # BAD — doesn't intercept the call inside mypkg.module
-   @mock.patch("os.path.exists")
-   def test_check(mock_exists):
-       ...
-
-   # GOOD — patches the symbol that mypkg.module actually consults
-   @mock.patch("mypkg.module.os.path.exists")
-   def test_check(mock_exists):
-       ...
-   ```
-
-   `mypkg.module` did `import os` at module load — it has its OWN reference to `os.path.exists`. Patching `os.path.exists` rebinds the original module's attribute, but mypkg.module's local-bound reference still points at the original function. This is the single most common reason `mock.patch` "doesn't work."
-
-2. **Mocking what you don't own:**
-
-   ```python
-   # BAD — couples the test to the library's internals
-   @mock.patch("requests.get")
-   def test_fetch_user(mock_get):
-       mock_get.return_value = ...
-
-   # GOOD — mock at YOUR boundary
-   @mock.patch("mypkg.http_client.fetch")
-   def test_fetch_user(mock_fetch):
-       mock_fetch.return_value = ...
-   ```
-
-   Mock at the seam between your code and theirs. Mocking the third-party library directly forces the test to rewrite itself every time the library changes its internals — and ties you to library-specific quirks that have nothing to do with what you're verifying.
-
-3. **Over-mocking:**
-
-   A test that mocks five or more collaborators is verifying very little — it's mostly testing that the mocks return what the mocks return. Flag tests where the mock count exceeds the assertion count, or where most of the test body is `mock_X.return_value = ...` setup. The right fix is usually to test at a higher level (the integration boundary) or to refactor the code under test for fewer collaborators.
-
-4. **`@pytest.mark.skip` without `reason=`:**
-
-   ```python
-   # BAD — dead test, no plan to unskip
-   @pytest.mark.skip
-   def test_thing():
-       ...
-
-   # GOOD — reason documents the deferral and (ideally) the unblock condition
-   @pytest.mark.skip(reason="blocked on beads-1234; remove after fix lands")
-   def test_thing():
-       ...
-   ```
-
-   A skipped test with no reason is a dead test. Either fix it now, file a beads ticket and reference it in the reason, or delete the test entirely. The same rule applies to `@pytest.mark.skipif(condition)` — the condition should be self-documenting (`skipif(sys.platform == "win32", reason="POSIX-only feature")`).
-
-5. **Tests that don't assert anything:**
-
-   ```python
-   # BAD — verifies only that the import works and the function doesn't raise
-   def test_compute():
-       compute(x=1, y=2)
-
-   # GOOD — verifies behavior
-   def test_compute():
-       assert compute(x=1, y=2) == 3
-   ```
-
-   Flag the absence of `assert`, `pytest.raises`, `mock.assert_called_with`, `mock.assert_called_once`, `mock.assert_not_called`, or equivalent. Tests that don't assert look like coverage but verify nothing meaningful — the function could return any value and the test would still pass.
-
-   Acceptable exception: tests whose body is entirely a `with pytest.raises(...):` block (the raises IS the assertion), or smoke tests that explicitly use `pytest.fail()` if a condition isn't met (rare).
+**Selfcheck that cannot fail:** a new assertion that still passes when the touched logic is broken. Prove it: break the logic in a scratch copy and run `docker run --rm -v "<copy>/src:/src:ro" -e PYTHONPATH=/src --entrypoint python autoblender:latest -m autoblender.<module>` (the mount covers a stale local image); report the exit code.
 
 **Review approach:**
 
-1. Identify all functions/methods added or modified in the PR.
-2. For each, grep `tests/` for tests that name or call it.
-3. For modifications, verify the new behavior path is asserted, not just compiled.
-4. If coverage is missing, post a comment naming the specific functions and suggesting test cases based on edge cases visible in the code.
-5. Distinguish between "no coverage" (block), "coverage exists but doesn't hit the new branch" (block), and "pure refactor of already-covered code" (allow).
-6. For each new or modified test file, scan for the five test-quality patterns: `mock.patch` targets, mocks of third-party libraries, mock count vs assertion count, `@pytest.mark.skip` without `reason=`, and missing assertions.
+1. Identify all functions added or modified in the PR.
+2. For each, grep the module's `_selfcheck()` and the `_check_*` helpers it calls for calls to it.
+3. For modifications, verify the new behavior path is asserted, not just executed.
+4. Distinguish "no coverage" and "coverage misses the new branch" (flag) from "pure refactor of covered code" (allow).
+5. For each new or modified selfcheck, confirm it asserts on output, not only that the call returns.
 
 **What to flag:**
 
-- New public functions/methods with no test.
-- Modified functions where the modification's branch isn't asserted.
-- New exception paths with no test that triggers the exception.
-- Edge cases visible in the code (`None` inputs, empty collections, boundary numbers) without assertions.
-- New `Generator.generate()` without a deterministic-output regression test.
+- New functions with non-trivial logic and no selfcheck coverage.
+- Modified functions where the new branch isn't asserted.
+- New exception paths with no assertion that triggers them.
+- Edge cases visible in the code (`None`, empty meshes, boundary values) without assertions.
 
 **Do NOT allow:**
 
-- "Verified manually via CLI" or "I ran it once" as a substitute when the unit has branching logic.
-- Marking test coverage as "out of scope" without an accompanying beads ticket.
-- Adding a new branch to a tested function without an assertion that hits the new branch.
+- "Verified manually via CLI" as a substitute when the unit has branching logic.
+- Marking coverage "out of scope" without a beads ticket.
 
-**Acceptable exceptions (each requires a beads ticket created before merge):**
+**Acceptable exceptions (each needs a beads ticket before merge):**
 
-- Adding tests to legacy uncovered code is genuinely larger than this PR.
-- The change is a config/data file edit with no executable logic.
-- The change is a dependency bump with no source change in this repo.
-- SPA changes (in `spa-next/`) have svelte-check + manual Playwright e2e but no unit test harness — note significant logic gaps as a coverage call-out; the SPA is small enough that the Playwright e2e + per-PR screenshot review is the working verification.
+- Covering legacy uncovered code is genuinely larger than this PR.
+- The change is a config/data edit with no executable logic, or a dependency bump.
