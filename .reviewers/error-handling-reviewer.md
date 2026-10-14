@@ -1,4 +1,10 @@
 # error-handling-reviewer
+**Checks:** silent exception swallows, `return` inside `finally`, generic `except Exception` without re-raise, bare `except:`, missing `raise ... from`, `assert` used for runtime validation.
+**Spawn when:** PR touches production `*.py`. Skip for docs / config / tofu-only diffs.
+**Contents:** Patterns to FLAG: Silent exception swallowing — the most damaging pattern; `return` statement inside a `finally` block; Generic `except Exception` without re-raise; Bare `except; Missing exception chaining; Custom exception classes for caller-handleable cases; `try/finally` for cleanup when a context manager would do; `assert` used for runtime validation rather than invariants · Acceptable patterns: Assertions with context; Specific exception handling with `raise ... from`; Known exception handling for documented expected cases; Bare `except` with `raise` for cleanup; `contextlib.suppress` for genuinely-ignorable cases · Review approach
+
+---
+
 
 Review Python code for **error handling correctness**. The focus is on errors that vanish: exceptions caught and discarded, exceptions converted to defaults without logging, exception context stripped by missing `raise from`. Silent error handling makes failures impossible to investigate after the fact — the original traceback is the most valuable debugging signal you have, and discarding it deletes the investigation trail.
 
@@ -189,4 +195,3 @@ This reviewer enforces universal Python error-handling hygiene. It does **not** 
 4. Grep for `try` blocks that could be `with` statements (i.e., the body acquires and the `finally` releases a resource).
 5. Grep for `raise X(...)` after `except`. Verify `from e` (or `from None` with justification) is present.
 6. For each ad-hoc `raise ValueError(...)` or `raise RuntimeError(...)` in places where callers might want to detect the case, suggest a custom exception class.
-

@@ -1,4 +1,10 @@
 # credentials-hygiene-reviewer
+**Checks:** literal secrets committed (P1), credential files or key-bearing zips/`.env` in the diff or image (P1), keys in URLs, keys echoed to output, key persistence outside Secrets Manager.
+**Spawn when:** PR touches auth/key code (`api.py`, `bin/package-stl-tools`, `bin/stl-tools.ps1`), `.gitignore`/`.dockerignore`, the Dockerfile, or tofu secrets. Cheap — when in doubt, spawn it.
+**Contents:** What to flag: Literal secrets in code or config; OAuth artifacts committed; Secrets in URLs; Secrets echoed to output; Insecure storage of tokens the tool persists; Test fixtures with realistic-looking credentials; New env var credentials without documentation · Do NOT flag · Review approach
+
+---
+
 
 Review PRs for **secrets and credential handling**. This repo deploys to AWS and guards one shared secret: the STL Tools API key, stored in Secrets Manager (minted by `bin/package-stl-tools`) and shipped to the client inside a gitignored zip as `.env`. Credentials live in Secrets Manager or the environment and must never enter the repo, the image, its logs, or its test data.
 

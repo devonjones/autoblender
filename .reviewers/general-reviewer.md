@@ -1,4 +1,10 @@
 # general-reviewer
+**Checks:** the whole PR, generalist pass — logic correctness against docstrings and the PR body (verified by running the code in the image, not by plausibility), design soundness, cross-cutting interactions, docs accuracy, house style. Does NOT duplicate the specialists.
+**Spawn when:** **every PR, every round.** Never skipped for scope; last to retire. Posts one structured PR comment.
+**Contents:** What to review (the generalist's beat): Logic correctness; Domain/design soundness; Contract fidelity; Cross-cutting integration; Docs and metadata accuracy; House style at the design level · Explicitly NOT this reviewer's beat · Method
+
+---
+
 
 Whole-PR generalist review. This repo has no Gemini Code Assist or Cursor Bugbot installed, so this reviewer stands in for the broad-coverage bot pass: it reviews the change **as a whole** for problems the specialist reviewers don't own. It runs on **every PR, every round** — it is never skipped for scope reasons and is the last reviewer to retire under diminishing returns.
 

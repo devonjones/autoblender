@@ -1,4 +1,10 @@
 # resource-leak-reviewer
+**Checks:** `open()`/`urlopen`/subprocess without context managers, temp files not cleaned up, whole-file reads of unbounded external input, per-call client construction in loops.
+**Spawn when:** PR touches `*.py` that allocates fds, sockets, temp files, or subprocesses.
+**Contents:** Patterns to FLAG: `open()` without a context manager; `subprocess.Popen` without `.wait()` or context manager; Database connections not closed; HTTP responses not closed; Unbounded `io.read()` / `response.content` from untrusted sources; `functools.lru_cache` without `maxsize=` on unbounded key spaces; Long-lived module-level dicts/sets as caches without eviction; `threading.Thread` / `multiprocessing.Process` not joined or daemonized correctly; `aiohttp.ClientSession` constructed per request; `tempfile.NamedTemporaryFile(delete=False)` without explicit cleanup; Manual `try/finally` chains where `contextlib.ExitStack` would do; Long-lived caches keyed by object identity without `weakref` · Do NOT flag · Review approach
+
+---
+
 
 Review Python code for **resource leaks** in long-running processes (daemons, servers, workers, CLI tools that process large batches). Python's GC is forgiving but not magic — file handles, sockets, database connections, and processes can pile up faster than GC frees them, especially in async code where the same coroutine reopens resources in a loop.
 
@@ -156,4 +162,3 @@ Review Python code for **resource leaks** in long-running processes (daemons, se
 2. For each `.read()` / `.content` / `.text` from external input: verify a size bound upstream.
 3. For each module-level `dict` / `set` written from multiple call sites: ask about eviction.
 4. For each `lru_cache`: verify `maxsize` is set when the key space is external.
-

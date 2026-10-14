@@ -1,3 +1,10 @@
+# terraform-reviewer
+**Checks:** this repo's tofu stays in the apps layer — no CloudFront/ACM/public DNS, no baseline resources, no reads from `openforge-infra-frontend` state, no hardcoded account ids outside backend config.
+**Spawn when:** PR adds or modifies a `resource`, `data`, `module`, `provider`, or backend block under `terraform/**/*.tf`. Skip value-only edits and non-tofu diffs.
+**Contents:** What this app's tofu SHOULD own · What this app's tofu MUST NOT own · What this app's tofu MUST NOT do · What this app's tofu SHOULD do · Cost discipline · Review approach
+
+---
+
 # tofu-reviewer
 
 Review tofu changes in `terraform/` to ensure this app stays in its lane within the **three-layer state stack**:
@@ -55,4 +62,3 @@ For full context, read `../openforge-infra/CLAUDE.md` and `../openforge-infra-fr
 6. For new variables, confirm sensible defaults and that the staging/production root modules both wire them through.
 
 **Note:** It is acceptable to acknowledge a layering violation and defer the fix by creating a beads ticket — but mark it P2 at minimum, not P3. Layer violations create deploy-order coupling that gets harder to untangle the longer it sits.
-

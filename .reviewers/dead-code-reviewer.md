@@ -1,4 +1,10 @@
 # dead-code-reviewer
+**Checks:** unused module-level symbols, commented-out code, partial refactors leaving the old name, `pass`-only stubs.
+**Spawn when:** PR touches `*.py`, especially when it removes call sites or moves code. Skip for pure additive changes.
+**Contents:** What to flag: Unused module-level functions, classes, constants; Unused exported names; Unused fixtures in `conftest.py`; Commented-out code; Partial refactors; Stale `__all__` entries; Unused parameters with default values; `if False; `def f() · Review approach · Do NOT flag
+
+---
+
 
 Review PRs for **dead code introduction**. Python's runtime has no compile-time check for unused symbols. `vulture` and `ruff` (`F401` unused imports, `F841` unused variables) catch most cases; this reviewer fills the gaps — especially around public APIs, reflection-driven code, and partial refactors.
 
@@ -31,4 +37,3 @@ Review PRs for **dead code introduction**. Python's runtime has no compile-time 
 - Build-tag-gated or platform-specific code (e.g., `if sys.platform == "win32":` branches).
 
 **Tooling cross-reference:** `vulture` catches most of this; assume CI runs it. This reviewer focuses on what vulture misses — public APIs, reflection-driven code (vulture's whitelist mechanism handles some of this if configured), and partial refactors that vulture sees as "still has callers" because the call site is in the same PR.
-

@@ -1,4 +1,10 @@
 # complexity-reviewer
+**Checks:** McCabe > 10, nesting depth ≥ 4, parameter count > 5, nested ternaries, redundant single-call wrappers. **Introduced/worsened only; no borderline soft flags.**
+**Spawn when:** PR touches production `*.py`. Skip for data / docs / config only.
+**Contents:** Posting gates (read before flagging anything): Introduced or worsened only — not pre-existing; Hard violations always; soft heuristics only when they compound; "And/Or" test; One-screen rule; Extractable inner structures; Nesting depth; Parameter count; Class size; Nested ternaries; Redundant single-call wrappers; Generic identifiers in long functions · Do NOT flag · DO flag (match/elif-specific)
+
+---
+
 
 Review **production code only** for function complexity. **Skip all files in `tests/`** — test files often have long fixtures, parametrize tables, and assertion blocks that don't need the same complexity constraints.
 
@@ -100,4 +106,3 @@ Apply these heuristics on top of the ruff floor:
 - `match` statements or `if-elif-else` chains with **multi-statement branch bodies that do branching logic** (each branch has its own `if`/`for`/`try`). The flatness exemption applies to dispatch tables, not to chains of mini-functions in disguise. If a branch body would itself trigger any heuristic above, extract it to a helper.
 
 **Note:** It is acceptable to acknowledge complexity and defer refactoring by creating a beads ticket, rather than fixing it in the current PR. This applies to heuristic findings; ruff `C901` violations should be resolved in-PR unless there's a documented reason.
-

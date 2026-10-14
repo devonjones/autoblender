@@ -1,4 +1,10 @@
 # external-process-reviewer
+**Checks:** missing `timeout=` on `subprocess.run`, `shell=True` with non-literal input (P1), no stderr capture on failure, undifferentiated failure modes.
+**Spawn when:** PR diff uses `subprocess`, `os.system`, or `shutil.which`. Skip otherwise.
+**Contents:** Patterns to FLAG: Missing `timeout=`; `shell=True` with any non-literal input; `subprocess.Popen` without context manager; No stderr capture on failure; Missing `cwd=`; No differentiation between failure modes; Unbounded output capture; Binary presence assumed, never checked; Output parsing without validation · Do NOT flag · Review approach
+
+---
+
 
 Review Python code that shells out via `subprocess`. CLI failures (timeout, malformed output, missing binary) are routine, and Python's defaults are dangerous.
 
@@ -115,4 +121,3 @@ Review Python code that shells out via `subprocess`. CLI failures (timeout, malf
 1. For each `subprocess.*`: check timeout, `shell=False`, `cwd`, error-category handling, stderr capture.
 2. For each binary invoked: verify presence checked at startup (or first-use, with a clear error message).
 3. Flag any `shell=True` with non-literal arguments as P1 (command injection).
-

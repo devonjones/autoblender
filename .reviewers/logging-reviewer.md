@@ -1,4 +1,10 @@
 # logging-reviewer
+**Checks:** sensitive data in diagnostics (P1), `print()` to stdout where stdout carries data, chatty defaults, error output without the cause.
+**Spawn when:** PR touches `*.py` or `bin/*` that prints diagnostics. Skip otherwise.
+**Contents:** Patterns to FLAG — universal (apply in any context): Sensitive data in log messages; `logger.error(...)` inside an `except` block without `exc_info=True`; `logging.basicConfig()` called from library code; Eager formatting in hot debug paths · Patterns to FLAG — CLI entry points only: Default log level too verbose; No verbosity flag; Verbosity flag that doesn't stack; `print()` for diagnostic output in CLI tools · Patterns to FLAG — library / service only: `print()` in library or service code; Log-level discipline · Do NOT flag · Review approach
+
+---
+
 
 Review Python code for **logging discipline**. Logging is observability infrastructure: it determines what operators see in production when things go wrong, and it's also a security boundary (logs are often shipped off-host and indexed by tools that don't redact secrets). The reviewer covers two contexts with different rules:
 
@@ -181,4 +187,3 @@ CLI tools follow Unix's rule of silence: *when a program has nothing surprising 
 4. For CLI files: check default level, verbosity flag presence + stacking, stdout/stderr discipline.
 5. For library files: flag any `basicConfig` call (P2).
 6. For `print()`: classify by file type; flag in libraries/services, allow in CLIs only for stdout data output.
-

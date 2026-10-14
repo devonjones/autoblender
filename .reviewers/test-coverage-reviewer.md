@@ -1,4 +1,10 @@
 # test-coverage-reviewer
+**Checks:** every touched function with non-trivial logic is exercised by a module `_selfcheck()` (this repo's convention; no pytest), the check actually fails when the logic breaks, bug fixes get a regression assertion.
+**Spawn when:** PR modifies `src/autoblender/*.py` outside pure CLI wiring. Skip for docs / tofu / Dockerfile-only diffs.
+**Contents:** Core rule: Code touched by a PR must be covered by tests. Either the coverage already exists, or this PR adds it. · Rules to enforce: Coverage required for all touched code; Refactors preserve coverage, not duplicate it; New behavior needs new assertions; Test file naming and structure; Bug fix documentation · Integration tests as coverage — acceptable boundary · Test quality patterns to flag (P2): `mock.patch` at point-of-definition instead of point-of-use; Mocking what you don't own; Over-mocking; `@pytest.mark.skip` without `reason=`; Tests that don't assert anything · Review approach · What to flag · Do NOT allow · Acceptable exceptions (each requires a beads ticket created before merge)
+
+---
+
 
 Review code changes to **ensure the code touched by the PR has test coverage**. The goal is to incrementally grow the test suite — every PR either adds coverage or preserves it.
 
@@ -140,4 +146,3 @@ Beyond coverage existence, the reviewer also flags tests whose behavior is broke
 - The change is a config/data file edit with no executable logic.
 - The change is a dependency bump with no source change in this repo.
 - SPA changes (in `spa-next/`) have svelte-check + manual Playwright e2e but no unit test harness — note significant logic gaps as a coverage call-out; the SPA is small enough that the Playwright e2e + per-PR screenshot review is the working verification.
-
