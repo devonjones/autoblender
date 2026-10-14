@@ -1,21 +1,26 @@
 # complexity-reviewer
+model: sonnet
+verification: mixed — C901, depth, parameter and method counts are evidence-queries (ruff output or counted lines, quoted); And/Or and one-screen findings are judgement.
+**Checks:** McCabe > 10, nesting depth ≥ 4, parameter count > 5, nested ternaries, redundant single-call wrappers. **Introduced/worsened only; no borderline soft flags.**
+**Spawn when:** PR touches production `*.py`. Skip for data / docs / config only.
+**Contents:** Posting gates (read before flagging anything): Introduced or worsened only — not pre-existing; Hard violations always; soft heuristics only when they compound; "And/Or" test; One-screen rule; Extractable inner structures; Nesting depth; Parameter count; Class size; Nested ternaries; Redundant single-call wrappers; Generic identifiers in long functions · Do NOT flag · DO flag (match/elif-specific)
 
-Review **production code only** for function complexity. **Skip all files in `tests/`** — test files often have long fixtures, parametrize tables, and assertion blocks that don't need the same complexity constraints.
+**Severity:** P2 for C901/depth/params/nested ternary; P3 for heuristics.
+
+Review **production code only** for function complexity. `_selfcheck()` and its `_check_*` helpers are test code: skip them.
 
 ## Posting gates (read before flagging anything)
 
-Roster firing data showed this reviewer is high-volume and high-value but only ~half its valid findings drive a change — the other half are dispositioned **out-of-scope** (it flagged pre-existing complexity) or **won't-fix** (it flagged a borderline function that passes the objective floor). Two gates fix that without losing the signal that works:
+1. **Introduced or worsened only — not pre-existing.** Flag complexity this PR *creates* or *materially worsens*. If a function was already over a threshold before this PR (it was long / complex on the PR base) and this PR only edits a few lines inside it without pushing it further over, it is **out of scope** — do not post it. (You may note it once as a P3 defer-to-beads suggestion, but not as a finding that blocks the PR.) Check the diff: is the threshold breach in *added* lines, or did the PR push an already-borderline function past the line/complexity limit? If neither, skip.
+2. **Hard violations always; soft heuristics only when they compound.** The objective `C901 > 10` floor and the unambiguous structural smells (depth ≥ 4, > 5 params, nested ternaries ≥ 2 levels) post on every occurrence. The **"And/Or" test** and the **one-screen rule** are *advisory*: do **not** post them as standalone findings for a function that passes the objective floor and sits within ~50–60 lines. Raise a soft heuristic only when it compounds a hard violation on the same function (e.g. a C901 breach *and* a confusing description), so the finding carries an objective anchor.
 
-1. **Introduced or worsened only — not pre-existing.** Flag complexity this PR *creates* or *materially worsens*. If a function was already over a threshold before this PR (it was long / complex on `origin/main`) and this PR only edits a few lines inside it without pushing it further over, it is **out of scope** — do not post it. (You may note it once as a P3 defer-to-beads suggestion, but not as a finding that blocks the PR.) Check the diff: is the threshold breach in *added* lines, or did the PR push an already-borderline function past the line/complexity limit? If neither, skip.
-2. **Hard violations always; soft heuristics only when they compound.** The objective `C901 > 10` floor and the unambiguous structural smells (depth ≥ 4, > 5 params, > 20 public methods, nested ternaries ≥ 2 levels) post on every occurrence. The **"And/Or" test (#1)** and the **one-screen rule (#2)** are *advisory*: do **not** post them as standalone findings for a function that passes the objective floor and sits within ~50–60 lines. Raise a soft heuristic only when it compounds a hard violation on the same function (e.g. a C901 breach *and* a confusing description), so the finding carries an objective anchor.
-
-**Objective floor: `ruff check --select C901 --max-complexity 10 .` must pass on every PR.** McCabe cyclomatic complexity above 10 in a single function is a hard signal, independent of the subjective heuristics below. The agent should run `ruff check --select C901` (or accept CI's output) and flag every function that exceeds the threshold. Measure against the **PR head** — the worktree/branch under review, or CI's output for the PR SHA — **never the local `main` checkout** (kept idle and stale per the worktree workflow), and use the **CI-pinned ruff version** (a stale local ruff mis-measures). If you cannot confirm the tree is at the PR head, prefer CI's reported C901 output over a local run. (This closes the PR #761 false-positive: complexity measured on a stale on-disk `main` while the actual PR head was ≤5.)
+**Objective floor: `ruff check --select C901 --max-complexity 10 .` must pass on every PR.** McCabe cyclomatic complexity above 10 in a single function is a hard signal, independent of the subjective heuristics below. Run `ruff check --select C901` (ruff is not pinned, in the image, or in CI; `uvx ruff` works) and flag every function that exceeds the threshold. Measure the **PR head** — the worktree/branch under review — **never a stale local checkout**.
 
 Apply these heuristics on top of the ruff floor:
 
 1. **"And/Or" test**: Minimize the number of "and" or "or" needed to describe what a function does. If you need multiple conjunctions, the function is doing too much.
-   - Good: "This function generates a town name from a culture's morpheme proportions."
-   - Bad: "This function generates a name AND parses tags AND seeds the RNG AND formats the explanation."
+   - Good: "This function cuts a mesh at a z plane."
+   - Bad: "This function loads the STL AND cuts it AND repairs it AND writes the report."
 
 2. **One-screen rule**: Functions should fit on one screen (~50–60 lines). Longer functions are harder to reason about.
    - **Internal functions don't count**: When a function contains internal helper `def`s, the lines of those helpers do NOT count against the parent's line limit. Only the "main body" lines count.
@@ -23,7 +28,7 @@ Apply these heuristics on top of the ruff floor:
 
 3. **Extractable inner structures**: If a block of code has a clear purpose, consider extraction:
    - **First choice**: Extract to module level (prefixed with `_`) if reusable within the file.
-   - **Second choice**: Extract to a sibling helper module under the same generator package.
+   - **Second choice**: Extract to a sibling module in `src/autoblender/`.
    - **Last choice**: Keep as an internal function if truly tied to the parent's context.
 
 4. **Nesting depth**: Flag functions with **indent depth ≥ 4 inside the function body** (four levels of indentation beyond the `def` line). Deep nesting makes control flow hard to follow.
@@ -90,14 +95,13 @@ Apply these heuristics on top of the ruff floor:
 
 **Do NOT flag:**
 
-- Test files (`tests/`).
+- Selfcheck code (`_selfcheck()`, `_check_*`).
 - Functions that are long but linear (no branching, just sequential transformations like a parser pipeline) **up to ~100 lines**. Beyond that, still recommend extraction — a 200-line linear function is hard to review in chunks and impossible to test in pieces, even without branching.
 - `match` / `if-elif-else` chains where each branch is **a short value→action mapping** (one or two statements per branch, often just a return or a function call). These are inherently flat.
-- Functions whose length comes from a single long parametrize table or a single long literal data structure (dict/list).
+- Functions whose length comes from a single long literal data structure (dict/list).
 
 **DO flag (match/elif-specific):**
 
 - `match` statements or `if-elif-else` chains with **multi-statement branch bodies that do branching logic** (each branch has its own `if`/`for`/`try`). The flatness exemption applies to dispatch tables, not to chains of mini-functions in disguise. If a branch body would itself trigger any heuristic above, extract it to a helper.
 
 **Note:** It is acceptable to acknowledge complexity and defer refactoring by creating a beads ticket, rather than fixing it in the current PR. This applies to heuristic findings; ruff `C901` violations should be resolved in-PR unless there's a documented reason.
-

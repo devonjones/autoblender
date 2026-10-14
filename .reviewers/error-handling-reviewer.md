@@ -1,8 +1,15 @@
 # error-handling-reviewer
+model: sonnet
+verification: mixed — swallows are mutations (raise inside the try in a scratch copy, show the error vanishes); return-in-finally, bare except and missing `from` are evidence-queries (quote the line); custom-exception suggestions are judgement.
+**Checks:** silent exception swallows, `return` inside `finally`, generic `except Exception` without re-raise, bare `except:`, missing `raise ... from`, `assert` used for runtime validation.
+**Spawn when:** PR touches production `*.py`. Skip for docs / config / tofu-only diffs.
+**Contents:** Patterns to FLAG: Silent exception swallowing — the most damaging pattern; `return` statement inside a `finally` block; Generic `except Exception` without re-raise; Bare `except:`; Missing exception chaining; Custom exception classes for caller-handleable cases; `assert` used for runtime validation rather than invariants · Acceptable patterns: Assertions with context; Specific exception handling with `raise ... from`; Known exception handling for documented expected cases; Bare `except` with `raise` for cleanup; `contextlib.suppress` for genuinely-ignorable cases; Asserts inside `_selfcheck()` · Review approach
+
+**Severity:** P2, unless a pattern below is tagged otherwise.
 
 Review Python code for **error handling correctness**. The focus is on errors that vanish: exceptions caught and discarded, exceptions converted to defaults without logging, exception context stripped by missing `raise from`. Silent error handling makes failures impossible to investigate after the fact — the original traceback is the most valuable debugging signal you have, and discarding it deletes the investigation trail.
 
-This reviewer enforces universal Python error-handling hygiene. It does **not** take a stance on whether a codebase should be defensively forgiving (web apps where `user.get("name", "Anonymous")` is idiomatic) or aggressively brittle (parsers / data pipelines where any unexpected structure should fail loudly). That's a project-level architectural choice and lives in the project's own AGENT-REVIEWERS.md.
+This reviewer enforces universal Python error-handling hygiene. It does **not** take a stance on whether a codebase should be defensively forgiving (web apps where `user.get("name", "Anonymous")` is idiomatic) or aggressively brittle (parsers / data pipelines where any unexpected structure should fail loudly). That's a project-level architectural choice and is not this reviewer's call.
 
 **Patterns to FLAG:**
 
@@ -81,41 +88,11 @@ This reviewer enforces universal Python error-handling hygiene. It does **not** 
 
 6. **Custom exception classes for caller-handleable cases (P3):**
 
-   Errors that callers will branch on programmatically (not-found, already-exists, validation-failure) should be declared as classes inheriting from a meaningful base:
-
-   ```python
-   # GOOD
-   class LexiconError(Exception):
-       """Base class for lexicon-layer errors."""
-
-   class EntryNotFound(LexiconError):
-       pass
-
-   def get_entry(game_id: str) -> Entry:
-       row = db.fetchone("SELECT * FROM entries WHERE game_id = ?", (game_id,))
-       if row is None:
-           raise EntryNotFound(game_id)
-       return Entry.from_row(row)
-   ```
+   Errors that callers will branch on programmatically (not-found, already-exists, validation-failure) should be declared as classes inheriting from a meaningful base.
 
    Flag ad-hoc `raise ValueError("not found")` in places where the caller clearly needs to detect the case but can't, because `ValueError` is too generic to match safely.
 
-7. **`try/finally` for cleanup when a context manager would do (P3):**
-
-   ```python
-   # BAD — manual cleanup that early returns can skip
-   f = open(path)
-   try:
-       data = f.read()
-   finally:
-       f.close()
-
-   # GOOD
-   with open(path) as f:
-       data = f.read()
-   ```
-
-8. **`assert` used for runtime validation rather than invariants (P2):**
+7. **`assert` used for runtime validation rather than invariants (P2):**
 
    ```python
    # BAD — asserts can be stripped with python -O
@@ -181,12 +158,12 @@ This reviewer enforces universal Python error-handling hygiene. It does **not** 
 
    Better than `try/except FileNotFoundError: pass` because intent is explicit and the diff stays a one-liner.
 
+6. **Asserts inside `_selfcheck()`** — that is this repo's test harness, not runtime validation.
+
 **Review approach:**
 
 1. Grep for `except` patterns: `except Exception:`, `except:`, `except (...)`. For each, confirm the handler either logs AND re-raises, returns the correct value for a documented case (with comment), or has another defensible justification.
 2. Grep for `pass` immediately after `except`. Flag as P1.
 3. Grep for `return` inside `finally`. Flag as P1.
-4. Grep for `try` blocks that could be `with` statements (i.e., the body acquires and the `finally` releases a resource).
-5. Grep for `raise X(...)` after `except`. Verify `from e` (or `from None` with justification) is present.
-6. For each ad-hoc `raise ValueError(...)` or `raise RuntimeError(...)` in places where callers might want to detect the case, suggest a custom exception class.
-
+4. Grep for `raise X(...)` after `except`. Verify `from e` (or `from None` with justification) is present.
+5. For each ad-hoc `raise ValueError(...)` or `raise RuntimeError(...)` in places where callers might want to detect the case, suggest a custom exception class.
