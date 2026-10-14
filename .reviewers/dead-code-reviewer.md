@@ -7,7 +7,7 @@ verification: evidence-query — `git grep -nw <symbol>` across the repo (and th
 
 **Severity:** P3; a partial refactor leaving a callable old name: P2.
 
-Review PRs for **dead code introduction**. `ruff` (`F401`, `F841`) catches unused imports and variables; this reviewer fills the gaps — reflection-driven code and partial refactors.
+Review PRs for **dead code introduction**. Unused imports and variables are `uvx ruff check --select F401,F841` (ruff is not in the image or CI); this reviewer fills the gaps — reflection-driven code and partial refactors.
 
 **What to flag:**
 

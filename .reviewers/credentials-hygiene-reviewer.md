@@ -17,7 +17,7 @@ Review PRs for **secrets and credential handling**. This repo deploys to AWS and
 
 4. **Secrets echoed to output (P1):** tokens in exception messages, `print()` diagnostics, CLI output, or assertion messages. Also flag debug endpoints or CLI flags that dump full config including credentials.
 
-5. **Insecure storage of tokens the tool persists (P2):** `bin/package-stl-tools` writes the API key into a `.env` inside `dist/`. Flag: tokens written into the repo tree, into fixture files, into world-readable paths, or into files not covered by `.gitignore`. Acceptable: env files outside the repo, `~/.config`-style dotfiles with `0600`-style expectations, OS keyring.
+5. **Insecure storage of tokens the tool persists (P2):** `bin/package-stl-tools` writes the API key into a `.env` in a `mktemp -d` dir, then zips it to `dist/stl-tools-<env>.zip` (gitignored). Flag: tokens written into the repo tree, into fixture files, into world-readable paths, or into files not covered by `.gitignore`. Acceptable: env files outside the repo, `~/.config`-style dotfiles with `0600`-style expectations, OS keyring.
 
 6. **Test fixtures with realistic-looking credentials (P3):** tests should use obviously-fake values (`"test-token"`, `"fake-client-id"`), not plausible or expired-real ones. An expired-real JWT in a test still reveals account ids, scopes, and endpoint shapes.
 

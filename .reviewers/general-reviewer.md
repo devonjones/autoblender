@@ -13,8 +13,8 @@ This repo has no Gemini Code Assist or Cursor Bugbot, so this reviewer stands in
 2. **Domain/design soundness** — is the data model / API shape / control flow right for what comes next? Read the PR body for what this feeds into; flag designs that force a rework one step later.
 3. **Contract fidelity** — request/response shapes, field names, status codes, checked against the authoritative source (spec docs, the dependency's actual source) rather than assumption.
 4. **Cross-cutting integration** — interactions between the PR's parts, and between the PR and existing code, that no single-file review sees (e.g. a change to what `union_mesh` returns that `cut.py`, its caller, doesn't expect).
-5. **Docs and metadata accuracy** — PR body claims and commands in docs (run them). Docstring/markdown accuracy is clarity-reviewer's when it is spawned.
-6. **House style at the design level** — the module docstrings' stated rationale and the `ab` conventions: Unix-style CLI, `-` for stdin/stdout, data on stdout and diagnostics on stderr, `import bpy` deferred until a command needs it, manifold3d over Blender booleans. `union.py`, `cut.py`, `api.py` stay bpy-free; PowerShell stays 5.1-compatible and ASCII-only; deliberate corner-cuts carry a `ponytail:` comment naming the ceiling.
+5. **Docs and metadata accuracy** — PR body claims and commands in docs (run them). Docstring/markdown accuracy is clarity-reviewer's.
+6. **House style at the design level** — the module docstrings' stated rationale and the `ab` conventions: Unix-style CLI, `-` for stdin/stdout, data on stdout and diagnostics on stderr, `import bpy` deferred until a command needs it, manifold3d over Blender booleans. `union.py`, `cut.py`, `api.py`, `io.py` stay bpy-free; PowerShell stays 5.1-compatible and ASCII-only; deliberate corner-cuts carry a `ponytail:` comment naming the ceiling.
 
 **Explicitly NOT this reviewer's beat:** complexity thresholds, exception handling, test coverage, resource leaks, dead code, print/logging discipline, subprocess hygiene, credentials, tofu layering, docstring wording — each has a specialist.
 
