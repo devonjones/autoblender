@@ -20,3 +20,6 @@ dist/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# render output, kept locally
+shots/
