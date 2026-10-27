@@ -27,6 +27,7 @@ p.add_argument("--parts", default="base,floor,wall", help="which of base,floor,w
 p.add_argument("--add", action="append", default=[], metavar="NAME:X,Y,Z[,ROTZ]",
                help="extra drybrushed part NAME.stl, turned ROTZ degrees about its origin then moved; repeatable")
 p.add_argument("--wood", default="", help="comma list of part names to paint as wood (e.g. a door), not stone")
+p.add_argument("--metal", default="", help="comma list of part names to paint as silvery iron (bands, handles)")
 p.add_argument("--spin", type=float, default=180.0, help="turn the assembly about the tile centre; 180 puts the wall at the back")
 p.add_argument("--yaw", type=float, default=28.0)
 p.add_argument("--pitch", type=float, default=24.0)
@@ -146,6 +147,23 @@ def _drybrush(nt, colour, hi=DRYBRUSH):
     return mix.outputs["Result"]
 
 
+def metal(name):
+    """Silvery iron: metallic, slightly rough, darkened in its recesses by AO."""
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
+    ao = S._new(nt, "ShaderNodeAmbientOcclusion")
+    ao.inputs["Distance"].default_value = a.grout_mm
+    ao.only_local = True
+    cav = S._ramp(nt, [(a.grout_lo, (0.10, 0.10, 0.11)), (a.grout_hi, (0.78, 0.78, 0.80))])
+    nt.links.new(ao.outputs["AO"], S._in(cav, "Fac", "Factor"))
+    nt.links.new(cav.outputs["Color"], b.inputs["Base Color"])
+    S._set(b, "Metallic", 1.0)
+    S._set(b, "Roughness", 0.38)
+    return m
+
+
 def stone(name, brush=True, wood=False):
     """Light stone, mild mottling, dark grout from ambient occlusion.
 
@@ -200,7 +218,8 @@ spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.radians(a.spi
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
 for name, (x, y, z, rotz), brush in placed:
-    mat = stone(name, brush=brush, wood=name in a.wood.split(","))
+    mat = (metal(name) if name in a.metal.split(",")
+           else stone(name, brush=brush, wood=name in a.wood.split(",")))
     o = import_stl(f"{name}.stl")
     o.name = name
     o.matrix_world = (spin @ Matrix.Translation((x, y, z))
