@@ -90,6 +90,8 @@ The defaults are the settings you approved (v05 in the session):
 | `--wall` / `--floor` / `--base` | see placement | x,y,z position of each part |
 | `--parts` | base,floor,wall | which parts to load; `base,floor` for a floor-only shot |
 | `--spin` | 180 | degrees to turn the assembly about the tile centre; turn the model, not `--yaw`, since the lights don't follow the camera |
+| `--wood` | none | comma list of part names (e.g. `door`) painted as stained wood: grain bands and a tan drybrush highlight instead of stone |
+| `--metal` | none | comma list of part names painted as silvery iron (bands, handles) |
 | `--add` | none | `NAME:x,y,z[,rotz]`, repeatable: load `NAME.stl` drybrushed, turned about its own origin, then moved |
 | `--samples` / `--res` | 24 / 1000 | 24 is a preview; use 256 for the final render |
 
@@ -126,6 +128,7 @@ uploads them to R2 as `guides/guide.<key>.webp`.
 | wall | the three parts above | `shots/wall-on-tile-drybrush-640.webp` |
 | floor | `dungeon_stone%block#floor.2x2.openforge.stl` (md5 `e1d767845e1862fff3a8dc04e86133c6`) as `floor.stl` and the base above, with `--parts base,floor` | `shots/floor-on-base-drybrush-640.webp` |
 | corner | see below | `shots/corner-on-tile-drybrush-640.webp` |
+| door | see below | `shots/door-on-tile-drybrush-640.webp` |
 
 The corner card stages the 2x2 `openlock+topless,magnetic+flex` base (md5
 `08e057025fc32aa754c49798095e03ad`, the wall card's base) and the `dungeon_stone/s2w/corner/` floor, left and
@@ -135,6 +138,29 @@ puts the corner at the back left, so the default camera and lights look into it:
 ```
 --parts base,floor --add left:31.62,-8.81,0 --add right:-23.84,31.61,0,270 \
     --add col:-8.45,6.55,0 --spin 270
+```
+
+The door card is a full 2x2 tile like the wall card. It uses the corner card's base,
+`plain#base+square.2x2.openlock+topless,magnetic+flex.stl` (`base.stl`), and the s2w floor
+`dungeon_stone%block#floor+s2w+wall.2x2.openforge.stl` (`floor.stl`), moved to y 0..38.1 so
+its half-width row runs along the wall. The wall is
+`dungeon_stone%block#wall,door+arched+standard.A.openforge.stl` (`wall.stl`), in the
+38.1..50.8 strip.
+
+The released `wood#door+standard.stl` is one fused shell, so the iron can't take its own
+material. Devon's shells version,
+`OpenForgeDevelopment/accessories/doors/curved/inch/rounded_door.wood_grain.standard.upright.shells.stl`,
+has four shells: the wood, two bands and the handle. Shift it by (+1.35, -2.54, +31.0) into the
+released door's position (fitted to within 0.16mm), then split it into `doorwood.stl` (the
+largest shell) and `dooriron.stl` (the other three).
+
+The door is raised 0.5mm for a little clearance under it. At 0.75mm its rounded top starts to
+cut into the arch.
+
+```
+--parts base,floor --floor 0,-12.7,6 --add wall:25.4,44.45,0 \
+    --add doorwood:25.4,44.45,0.5 --add dooriron:25.4,44.45,0.5 \
+    --wood doorwood --metal dooriron --spin 0
 ```
 
 ## Run it

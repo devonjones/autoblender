@@ -26,6 +26,8 @@ p.add_argument("--base", default="0,0,0")
 p.add_argument("--parts", default="base,floor,wall", help="which of base,floor,wall to load, e.g. base,floor for a floor-only shot")
 p.add_argument("--add", action="append", default=[], metavar="NAME:X,Y,Z[,ROTZ]",
                help="extra drybrushed part NAME.stl, turned ROTZ degrees about its origin then moved; repeatable")
+p.add_argument("--wood", default="", help="comma list of part names to paint as wood (e.g. a door), not stone")
+p.add_argument("--metal", default="", help="comma list of part names to paint as silvery iron (bands, handles)")
 p.add_argument("--spin", type=float, default=180.0, help="turn the assembly about the tile centre; 180 puts the wall at the back")
 p.add_argument("--yaw", type=float, default=28.0)
 p.add_argument("--pitch", type=float, default=24.0)
@@ -70,6 +72,12 @@ for spec in a.add:
     if not name or name in [n for n, *_ in placed]:
         p.error(f"--add needs a new part name: {spec!r} clashes or has none")
     placed.append((name, place(f"--add {name}", off), True))
+wood, metal_parts = ({n for n in s.split(",") if n} for s in (a.wood, a.metal))
+names = {n for n, *_ in placed}
+if (wood | metal_parts) - names:
+    p.error(f"--wood/--metal name parts that aren't loaded: {sorted((wood | metal_parts) - names)}")
+if wood & metal_parts:
+    p.error(f"a part can't be both --wood and --metal: {sorted(wood & metal_parts)}")
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -84,6 +92,8 @@ sc.view_settings.look = S.LOOK
 STONE = (0.46, 0.40, 0.31)     # base stone colour (linear), before --light
 GROUT = (0.018, 0.015, 0.012)
 DRYBRUSH = (0.85, 0.80, 0.68)   # pale bone highlight
+WOOD = (0.17, 0.09, 0.04)       # dark stained wood (linear), before --light
+WOOD_DB = (0.60, 0.43, 0.26)    # worn tan highlight on the wood's edges
 
 
 def _math(nt, op, x, y):
@@ -97,7 +107,7 @@ def _math(nt, op, x, y):
     return n.outputs[0]
 
 
-def _drybrush(nt, colour):
+def _drybrush(nt, colour, hi):
     """Pale paint on convex edges, biased to up-facing surfaces, broken by noise.
 
     Not used on the base: it is ~3k faces, so its pointiness smears across whole
@@ -139,24 +149,50 @@ def _drybrush(nt, colour):
     mix.data_type = "RGBA"
     nt.links.new(fac, mix.inputs["Factor"])
     nt.links.new(colour, mix.inputs["A"])
-    mix.inputs["B"].default_value = (*DRYBRUSH, 1.0)
+    mix.inputs["B"].default_value = (*hi, 1.0)
     return mix.outputs["Result"]
 
 
-def stone(name, brush=True):
+def metal(name):
+    """Silvery iron: metallic, slightly rough, darkened in its recesses by AO."""
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
+    ao = S._new(nt, "ShaderNodeAmbientOcclusion")
+    ao.inputs["Distance"].default_value = a.grout_mm
+    ao.only_local = True
+    cav = S._ramp(nt, [(a.grout_lo, (0.10, 0.10, 0.11)), (a.grout_hi, (0.78, 0.78, 0.80))])
+    nt.links.new(ao.outputs["AO"], S._in(cav, "Fac", "Factor"))
+    nt.links.new(cav.outputs["Color"], b.inputs["Base Color"])
+    S._set(b, "Metallic", 1.0)
+    S._set(b, "Roughness", 0.38)
+    return m
+
+
+def stone(name, brush=True, wood=False):
     """Light stone, mild mottling, dark grout from ambient occlusion.
 
     The grout lines are real recesses in the mesh, so AO finds them without UVs.
+    wood=True swaps in a stained-wood palette, with vertical grain from wave bands
+    instead of the mottling noise.
     """
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     nt = m.node_tree
     b = nt.nodes["Principled BSDF"]
-    col = tuple(min(c * a.light, 1.0) for c in STONE)
-    lo = tuple(c * (1 - a.mottle) for c in col)
-    noise = S._new(nt, "ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = 20.0
-    noise.inputs["Detail"].default_value = 3.0
+    col = tuple(min(c * a.light, 1.0) for c in (WOOD if wood else STONE))
+    lo = tuple(c * (1 - (0.45 if wood else a.mottle)) for c in col)
+    if wood:
+        noise = S._new(nt, "ShaderNodeTexWave")     # bands across x = grain running up the boards
+        noise.wave_type, noise.bands_direction = "BANDS", "X"
+        noise.inputs["Scale"].default_value = 6.0
+        noise.inputs["Distortion"].default_value = 8.0
+        noise.inputs["Detail"].default_value = 4.0
+    else:
+        noise = S._new(nt, "ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = 20.0
+        noise.inputs["Detail"].default_value = 3.0
     tone = S._ramp(nt, [(0.35, lo), (0.65, col)])
     nt.links.new(noise.outputs["Fac"], S._in(tone, "Fac", "Factor"))
     ao = S._new(nt, "ShaderNodeAmbientOcclusion")
@@ -171,7 +207,7 @@ def stone(name, brush=True):
     nt.links.new(cav.outputs["Color"], mul.inputs["B"])
     colour = mul.outputs["Result"]
     if a.drybrush and brush:
-        colour = _drybrush(nt, colour)
+        colour = _drybrush(nt, colour, WOOD_DB if wood else DRYBRUSH)
     nt.links.new(colour, b.inputs["Base Color"])
     S._set(b, "Roughness", 0.85)
     bump = S._new(nt, "ShaderNodeBump")
@@ -188,7 +224,7 @@ spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.radians(a.spi
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
 for name, (x, y, z, rotz), brush in placed:
-    mat = stone(name, brush=brush)
+    mat = metal(name) if name in metal_parts else stone(name, brush=brush, wood=name in wood)
     o = import_stl(f"{name}.stl")
     o.name = name
     o.matrix_world = (spin @ Matrix.Translation((x, y, z))
