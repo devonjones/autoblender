@@ -50,7 +50,8 @@ jobs:
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
         run: |
-          docker build --target lambda \
+          # Lambda rejects a manifest list; newer Docker attaches attestations by default
+          docker build --target lambda --provenance=false --sbom=false \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --cache-from $IMAGE:latest \
             -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
