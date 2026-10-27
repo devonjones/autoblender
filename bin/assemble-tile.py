@@ -72,6 +72,12 @@ for spec in a.add:
     if not name or name in [n for n, *_ in placed]:
         p.error(f"--add needs a new part name: {spec!r} clashes or has none")
     placed.append((name, place(f"--add {name}", off), True))
+wood, metal_parts = ({n for n in s.split(",") if n} for s in (a.wood, a.metal))
+names = {n for n, *_ in placed}
+if (wood | metal_parts) - names:
+    p.error(f"--wood/--metal name parts that aren't loaded: {sorted((wood | metal_parts) - names)}")
+if wood & metal_parts:
+    p.error(f"a part can't be both --wood and --metal: {sorted(wood & metal_parts)}")
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -101,7 +107,7 @@ def _math(nt, op, x, y):
     return n.outputs[0]
 
 
-def _drybrush(nt, colour, hi=DRYBRUSH):
+def _drybrush(nt, colour, hi):
     """Pale paint on convex edges, biased to up-facing surfaces, broken by noise.
 
     Not used on the base: it is ~3k faces, so its pointiness smears across whole
@@ -218,8 +224,7 @@ spin = (Matrix.Translation((25.4, 25.4, 0)) @ Matrix.Rotation(math.radians(a.spi
         @ Matrix.Translation((-25.4, -25.4, 0)))
 parts = {}
 for name, (x, y, z, rotz), brush in placed:
-    mat = (metal(name) if name in a.metal.split(",")
-           else stone(name, brush=brush, wood=name in a.wood.split(",")))
+    mat = metal(name) if name in metal_parts else stone(name, brush=brush, wood=name in wood)
     o = import_stl(f"{name}.stl")
     o.name = name
     o.matrix_world = (spin @ Matrix.Translation((x, y, z))
