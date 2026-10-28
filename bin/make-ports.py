@@ -26,7 +26,8 @@ import sys
 
 import bpy      # must come first: the bpy module registers bmesh on init,
 import bmesh   # so importing bmesh before bpy raises ModuleNotFoundError
-from mathutils import Matrix
+from mathutils import Matrix, Vector
+from mathutils.bvhtree import BVHTree
 
 # Ports are DISCOVERED from the library, not hardcoded: a wall has a port block
 # per band per end, and the bands vary -- the facades tiles are 1/2" taller and
@@ -309,6 +310,14 @@ def main():
     ap.add_argument("--block-margin", type=float, metavar="MM",
                     help="replace each port block with a minimal one: the --style cutter's bounds "
                          "plus MM on each side (and past its inner end), out to the wall end")
+    ap.add_argument("--block-inner", type=float, metavar="MM",
+                    help="with --block-margin: margin past the cutter's inner tip (default the same "
+                         "as --block-margin); 0 stops the block at the tip, for walls where the "
+                         "doorway sits just beyond it")
+    ap.add_argument("--jamb-strip", action="store_true",
+                    help="with --block-margin: also add a full-height strip on each jamb, the depth of "
+                         "the port band and flush with the blocks' inner face, so the backing reads as "
+                         "one continuous face instead of pads at each port")
     ap.add_argument("--solver", choices=("MANIFOLD", "EXACT", "FLOAT"), default="MANIFOLD",
                     help="boolean solver for probe, trim and cut; MANIFOLD fails on a piece "
                          "with pinched edges, where EXACT still works")
@@ -370,7 +379,8 @@ def main():
             blo, bhi = world_bounds(blk)
             clo, chi = world_bounds(cut)
             outer = blo[0] if abs(blo[0]) > abs(bhi[0]) else bhi[0]
-            x0, x1 = (clo[0] - m, outer) if outer > 0 else (outer, chi[0] + m)
+            mi = m if a.block_inner is None else a.block_inner
+            x0, x1 = (clo[0] - mi, outer) if outer > 0 else (outer, chi[0] + mi)
             lo, hi = (x0, clo[1] - m, clo[2] - m), (x1, chi[1] + m, chi[2] + m)
             vs = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
             fs = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
@@ -469,6 +479,34 @@ def main():
                          f"{os.path.basename(a.library)}")
     for p in green:                       # blocks first: the cuts go through them
         boolean(piece, blocks[p], "UNION")
+    if a.jamb_strip:
+        plo, phi = world_bounds(piece)
+        for sign in (-1, 1):
+            end = [world_bounds(blocks[p]) for p in green if (world_bounds(blocks[p])[0][0] > 0) == (sign > 0)]
+            if not end:
+                continue
+            inner = min(b[0][0] for b in end) if sign > 0 else max(b[1][0] for b in end)
+            x0, x1 = (inner, inner + 2.0) if sign > 0 else (inner - 2.0, inner)   # 2mm into the jamb
+            y0, y1 = min(b[0][1] for b in end), max(b[1][1] for b in end)
+            # stop at the jamb's top (the lintel seat): the highest z where a ray out from just
+            # inside the doorway still meets the wall within the strip, at every y of the band
+            bvh = BVHTree.FromObject(piece, bpy.context.evaluated_depsgraph_get())
+            mw = piece.matrix_world.inverted()
+            def jamb_at(z):
+                for y in (y0 + 0.2, (y0 + y1) / 2, y1 - 0.2):
+                    hit = bvh.ray_cast(mw @ Vector((inner - 3.0 * sign, y, z)), mw.to_3x3() @ Vector((sign, 0, 0)))[0]
+                    if hit is None or abs((piece.matrix_world @ hit).x) > max(abs(x0), abs(x1)) + 0.05:
+                        return False
+                return True
+            ztop = phi[2]
+            while ztop > plo[2] and not jamb_at(ztop - 0.05):
+                ztop -= 0.1
+            vs = [(x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (plo[2], ztop)]
+            fs = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+            me = bpy.data.meshes.new(f"jamb-strip{sign:+d}"); me.from_pydata(vs, [], fs); me.update()
+            strip = bpy.data.objects.new(me.name, me); bpy.context.scene.collection.objects.link(strip)
+            print(f"# jamb strip x {x0:+.2f}..{x1:+.2f} y {y0:+.2f}..{y1:+.2f} z {plo[2]:.2f}..{ztop:.2f}")
+            boolean(piece, strip, "UNION")
     for p in green:
         print(f"# cut {p:12s} with {cuts[p].name!r}")
         boolean(piece, cuts[p], "DIFFERENCE")
