@@ -134,9 +134,10 @@ def minimal_blocks(blocks, cutters, style, m, mi):
         blk.matrix_world = Matrix.Identity(4)
 
 
-def jamb_top(piece, inner, sign, y0, y1, xmax, zlo, zhi):
-    """The jamb's top (the lintel seat): the highest z where a ray out from just inside
-    the doorway still meets the wall within the strip, at every y of the band."""
+def jamb_top(piece, sign, inner, lo, hi):
+    """The jamb's top (the lintel seat): the highest z in the strip box lo..hi where a ray
+    out from just inside the doorway still meets the wall within the strip, at every y of the band."""
+    y0, y1, xmax = lo[1], hi[1], max(abs(lo[0]), abs(hi[0]))
     bvh = BVHTree.FromObject(piece, bpy.context.evaluated_depsgraph_get())
     inv = piece.matrix_world.inverted()
     out = inv.to_3x3() @ Vector((sign, 0, 0))
@@ -148,8 +149,8 @@ def jamb_top(piece, inner, sign, y0, y1, xmax, zlo, zhi):
                 return False
         return True
 
-    z = zhi
-    while z > zlo and not jamb_at(z - 0.05):
+    z = hi[2]
+    while z > lo[2] and not jamb_at(z - 0.05):
         z -= 0.1
     return z
 
@@ -164,7 +165,7 @@ def add_jamb_strips(piece, bounds):
         inner = min(b[0][0] for b in end) if sign > 0 else max(b[1][0] for b in end)
         x0, x1 = (inner, inner + 2.0) if sign > 0 else (inner - 2.0, inner)
         y0, y1 = min(b[0][1] for b in end), max(b[1][1] for b in end)
-        ztop = jamb_top(piece, inner, sign, y0, y1, max(abs(x0), abs(x1)), plo[2], phi[2])
+        ztop = jamb_top(piece, sign, inner, (x0, y0, plo[2]), (x1, y1, phi[2]))
         if ztop <= plo[2] + 1.0:
             raise SystemExit(f"--jamb-strip: no jamb face found at x {inner:+.2f} -- nothing written")
         strip = bpy.data.objects.new(f"jamb-strip{sign:+d}", box_mesh(f"jamb-strip{sign:+d}", (x0, y0, plo[2]), (x1, y1, ztop)))
@@ -416,9 +417,9 @@ def main():
                          "as --block-margin); 0 stops the block at the tip, for walls where the "
                          "doorway sits just beyond it")
     ap.add_argument("--jamb-strip", action="store_true",
-                    help="with --block-margin: also add a full-height strip on each jamb, the depth of "
-                         "the port band and flush with the blocks' inner face, so the backing reads as "
-                         "one continuous face instead of pads at each port")
+                    help="with --block-margin: also add a 2mm strip on each jamb, across the port band "
+                         "and flush with the blocks' inner face, from the floor up to the lintel seat, "
+                         "so the backing reads as one continuous face instead of pads at each port")
     ap.add_argument("--solver", choices=("MANIFOLD", "EXACT", "FLOAT"), default="MANIFOLD",
                     help="boolean solver for probe, trim and cut; MANIFOLD fails on a piece "
                          "with pinched edges, where EXACT still works")
