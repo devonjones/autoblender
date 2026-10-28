@@ -26,6 +26,8 @@ import sys
 
 import bpy      # must come first: the bpy module registers bmesh on init,
 import bmesh   # so importing bmesh before bpy raises ModuleNotFoundError
+from mathutils import Matrix, Vector
+from mathutils.bvhtree import BVHTree
 
 # Ports are DISCOVERED from the library, not hardcoded: a wall has a port block
 # per band per end, and the bands vary -- the facades tiles are 1/2" taller and
@@ -84,11 +86,116 @@ def world_bounds(obj):
             [max(c[i] for c in cs) for i in range(3)])
 
 
+SOLVER = "MANIFOLD"              # --solver overrides, for a piece MANIFOLD rejects outright
+
+
 def boolean(obj, other, op):
     m = obj.modifiers.new("b", "BOOLEAN")
-    m.operation, m.object, m.solver = op, other, "MANIFOLD"
+    m.operation, m.object, m.solver = op, other, SOLVER
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.modifier_apply(modifier=m.name)
+
+
+def box_mesh(name, lo, hi):
+    vs = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    fs = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(vs, [], fs)
+    me.update()
+    return me
+
+
+def outer_x(obj):
+    lo, hi = world_bounds(obj)
+    return lo[0] if abs(lo[0]) > abs(hi[0]) else hi[0]
+
+
+def flatten_blocks(blocks, depth):
+    for o in blocks.values():
+        outer = outer_x(o)
+        limit = outer - depth if outer > 0 else outer + depth
+        mw, inv = o.matrix_world, o.matrix_world.inverted()
+        for v in o.data.vertices:
+            w = mw @ v.co
+            w.x = max(w.x, limit) if outer > 0 else min(w.x, limit)
+            v.co = inv @ w
+        o.data.update()
+
+
+def minimal_blocks(blocks, cutters, style, m, mi):
+    for p, cut in match_cutters(blocks, cutters, style).items():
+        if cut is None:
+            continue                         # no cutter of this style: the port stays as it was
+        blk = blocks[p]
+        outer = outer_x(blk)
+        clo, chi = world_bounds(cut)
+        x0, x1 = (clo[0] - mi, outer) if outer > 0 else (outer, chi[0] + mi)
+        blk.data = box_mesh(blk.name + ".minimal", (x0, clo[1] - m, clo[2] - m), (x1, chi[1] + m, chi[2] + m))
+        blk.matrix_world = Matrix.Identity(4)
+
+
+def jamb_top(piece, sign, inner, lo, hi):
+    """The jamb's top (the lintel seat): the highest z in the strip box lo..hi where a ray
+    out from just inside the doorway still meets the wall within the strip, at every y of the band."""
+    y0, y1, xmax = lo[1], hi[1], max(abs(lo[0]), abs(hi[0]))
+    bvh = BVHTree.FromObject(piece, bpy.context.evaluated_depsgraph_get())
+    inv = piece.matrix_world.inverted()
+    out = inv.to_3x3() @ Vector((sign, 0, 0))
+
+    def jamb_at(z):
+        for y in (y0 + 0.2, (y0 + y1) / 2, y1 - 0.2):
+            hit = bvh.ray_cast(inv @ Vector((inner - 3.0 * sign, y, z)), out)[0]
+            if hit is None or abs((piece.matrix_world @ hit).x) > xmax + 0.05:
+                return False
+        return True
+
+    z = hi[2]
+    while z > lo[2] and not jamb_at(z - 0.05):
+        z -= 0.1
+    return z
+
+
+def add_jamb_strips(piece, bounds):
+    """Union a strip on each jamb, flush with that end's blocks' inner face across their y band."""
+    plo, phi = world_bounds(piece)
+    for sign in (-1, 1):
+        end = [b for b in bounds if (b[0][0] > 0) == (sign > 0)]
+        if not end:
+            continue
+        inner = min(b[0][0] for b in end) if sign > 0 else max(b[1][0] for b in end)
+        x0, x1 = (inner, inner + 2.0) if sign > 0 else (inner - 2.0, inner)
+        y0, y1 = min(b[0][1] for b in end), max(b[1][1] for b in end)
+        ztop = jamb_top(piece, sign, inner, (x0, y0, plo[2]), (x1, y1, phi[2]))
+        if ztop <= plo[2] + 1.0:
+            raise SystemExit(f"--jamb-strip: no jamb face found at x {inner:+.2f} -- nothing written")
+        strip = bpy.data.objects.new(f"jamb-strip{sign:+d}", box_mesh(f"jamb-strip{sign:+d}", (x0, y0, plo[2]), (x1, y1, ztop)))
+        bpy.context.scene.collection.objects.link(strip)
+        print(f"# jamb strip x {x0:+.2f}..{x1:+.2f} y {y0:+.2f}..{y1:+.2f} z {plo[2]:.2f}..{ztop:.2f}")
+        boolean(piece, strip, "UNION")
+
+
+def shape_blocks(blocks, cutters, a):
+    if a.block_depth:
+        flatten_blocks(blocks, a.block_depth)
+    if a.block_margin is not None:
+        minimal_blocks(blocks, cutters, a.style, a.block_margin,
+                       a.block_margin if a.block_inner is None else a.block_inner)
+
+
+def check_block_args(ap, a):
+    if a.block_margin is None and (a.block_inner is not None or a.jamb_strip):
+        ap.error("--block-inner and --jamb-strip need --block-margin")
+    if a.block_margin is not None and a.block_depth:
+        ap.error("--block-depth has no effect with --block-margin, which replaces the block")
+
+
+def only_ports(ports, only):
+    if not only:
+        return ports
+    want = set(only.split(","))
+    if want - set(ports):
+        raise SystemExit(f"--only names unknown ports: {sorted(want - set(ports))}; have {ports}")
+    return [p for p in ports if p in want]
 
 
 def trim_port(piece, block, clearance):
@@ -296,9 +403,29 @@ def main():
                     help="post-sculpt cleanup: cut each usable port's band back to "
                          "--clearance behind the mating plane and write the core to "
                          "--out.  Does NOT replace sculpting.")
+    ap.add_argument("--only", metavar="PORTS",
+                    help="comma list of port names (e.g. Side.Low.A,Side.Mid.B) to trim or "
+                         "cut; the rest are left untouched, e.g. ports still awaiting a sculpt")
+    ap.add_argument("--block-depth", type=float, metavar="MM",
+                    help="flatten each port block's inner face this far in from the wall end, "
+                         "for walls where the full-depth block reaches a built-in door")
+    ap.add_argument("--block-margin", type=float, metavar="MM",
+                    help="replace each port block with a minimal one: the --style cutter's bounds "
+                         "plus MM on each side (and past its inner end), out to the wall end")
+    ap.add_argument("--block-inner", type=float, metavar="MM",
+                    help="with --block-margin: margin past the cutter's inner tip (default the same "
+                         "as --block-margin); 0 stops the block at the tip, for walls where the "
+                         "doorway sits just beyond it")
+    ap.add_argument("--jamb-strip", action="store_true",
+                    help="with --block-margin: also add a 2mm strip on each jamb, across the port band "
+                         "and flush with the blocks' inner face, from the floor up to the lintel seat, "
+                         "so the backing reads as one continuous face instead of pads at each port")
+    ap.add_argument("--solver", choices=("MANIFOLD", "EXACT", "FLOAT"), default="MANIFOLD",
+                    help="boolean solver for probe, trim and cut; MANIFOLD fails on a piece "
+                         "with pinched edges, where EXACT still works")
     ap.add_argument("--clearance", type=float, default=CLEARANCE, metavar="MM")
     ap.add_argument("--min-fill", type=float, default=GREEN, metavar="PCT",
-                    help="only trim ports at least this full; a port that will never be "
+                    help="only trim or cut ports at least this full; a port that will never be "
                          "cut should not get a pointless pocket.  Default is the normal "
                          "100%% rule; pass e.g. 99 for a shape like door+arched narrow.A "
                          "where the archway clips a corner the clip never touches.")
@@ -308,7 +435,10 @@ def main():
                          "and non-manifold edges.  This measures whether a flush core "
                          "actually corrupts the union, rather than assuming it does.")
     a = ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
+    check_block_args(ap, a)
 
+    global SOLVER
+    SOLVER = a.solver
     letter = a.library.split("library.primary.")[1].split(".blend")[0]
     port_re = re.compile(PORT_RE.format(L=re.escape(letter)), re.I)
 
@@ -320,7 +450,7 @@ def main():
     with bpy.data.libraries.load(a.library, link=False) as (src, dst):
         block_names = sorted(n for n in src.objects if port_re.match(n))
         names = list(block_names)
-        if not a.probe_only:
+        if not a.probe_only or a.block_margin is not None:   # --block-margin sizes blocks from cutters
             names += [n for n in src.objects
                       if cut_pat.search(n) and not re.search(r"port ?block", n, re.I)]
         dst.objects = names
@@ -333,7 +463,8 @@ def main():
     blocks = {n[len(f"Port Block-{letter}."):]: bpy.data.objects[n] for n in block_names}
     cutters = [o for o in bpy.data.objects
                if o.type == "MESH" and o.name not in block_names]
-    ports = sorted(blocks)
+    shape_blocks(blocks, cutters, a)
+    ports = only_ports(sorted(blocks), a.only)
     print(f"# {len(ports)} ports in {os.path.basename(a.library)}")
 
     known = {o.name for o in bpy.data.objects}
@@ -391,12 +522,12 @@ def main():
     for p in ports:
         pct = probe(piece, blocks[p])
         proud, at = overhang(piece, blocks[p])
-        verdict[p] = pct >= GREEN and proud <= PROUD_MAX
+        verdict[p] = pct >= a.min_fill and proud <= PROUD_MAX
         blo, bhi = world_bounds(blocks[p])
         # print the band's z range: two ports at the same height means a block
         # has not been moved into place, which a percentage alone will not show
         why = "" if verdict[p] else (
-            " needs sculpting" if pct >= GREEN else "")
+            " needs sculpting" if pct >= a.min_fill else "")
         where = f" at y={at[0]:6.2f} z={at[1]:6.2f}" if at else ""
         print(f"# {p:16s} z=[{blo[2]:6.2f},{bhi[2]:6.2f}]  fill {pct:6.1f}%  "
               f"{proud:+7.3f}mm vs plane (need <={PROUD_MAX}){where}  "
@@ -419,6 +550,8 @@ def main():
                          f"{os.path.basename(a.library)}")
     for p in green:                       # blocks first: the cuts go through them
         boolean(piece, blocks[p], "UNION")
+    if a.jamb_strip:
+        add_jamb_strips(piece, [world_bounds(blocks[p]) for p in green])
     for p in green:
         print(f"# cut {p:12s} with {cuts[p].name!r}")
         boolean(piece, cuts[p], "DIFFERENCE")
