@@ -19,6 +19,7 @@ import csv
 import importlib.util
 import os
 import re
+import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _spec = importlib.util.spec_from_file_location("og", f"{REPO}/bin/option-gaps.py")
@@ -51,6 +52,8 @@ def rows_for(texture, folder, piece_dir=None):
     for fn in sorted(os.listdir(folder)):
         m = CORE_RE.match(fn)
         if not m or m["tex"] != texture:
+            if fn.endswith(".core.stl"):
+                print(f"skipped {fn}: not a {texture} separate-wall core", file=sys.stderr)
             continue                      # corners, backups, shells: not ours
         piece, letter = m["piece"], m["L"]
         pdir = piece_dir or piece
@@ -68,8 +71,6 @@ def rows_for(texture, folder, piece_dir=None):
                    "likely_deliberate": "no", "has_core": "yes",
                    "core_path": os.path.join(folder, fn), "node_group": group,
                    "set_args": args, "out_path": out, "status": ""}
-            # keyed, then ordered by the one definition in option-gaps.py --
-            # this used to be a bare positional list duplicating that order
             assert set(row) == set(og.COLUMNS), "row keys drifted from og.COLUMNS"
             yield [row[c] for c in og.COLUMNS]
 
@@ -94,13 +95,18 @@ def main():
                     "(rough_stone#wall,window+square ships in window+square/)")
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
+    if a.piece_dir and "/" in a.piece_dir:
+        ap.error("--piece-dir is one folder name, not a path")
 
     with open(og.OUT, newline="") as fh:
         rd = csv.reader(fh, delimiter="\t")
         next(rd)                                  # header, rewritten from og.COLUMNS
         existing = list(rd)
     have = {tuple(r[:4]) for r in existing}
-    new = [r for r in rows_for(a.texture, a.folder, a.piece_dir) if tuple(r[:4]) not in have]
+    rows = list(rows_for(a.texture, a.folder, a.piece_dir))
+    if not rows:
+        sys.exit(f"no {a.texture}#<piece>.<L>.core.stl in {a.folder}")
+    new = [r for r in rows if tuple(r[:4]) not in have]
     for r in new:
         print(f"{r[8]:22s} {r[10].split('/updates/')[-1]}")
     if not a.dry and new:

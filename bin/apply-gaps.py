@@ -56,15 +56,11 @@ def demo():
     base = {"texture": "t", "has_core": "yes", "likely_deliberate": "no",
             "node_group": "OpenLock", "status": "", "missing_option": "openlock+unsupported"}
     r = dict(base)
-    # the distinction --exact exists for: a substring match on
-    # "openlock+unsupported" also catches "openlock+unsupported,side", which is
-    # the difference between a row needing no ports and one waiting on a sculpt
     assert wanted(r, "t", "openlock+unsupported", exact=True)
     assert wanted(r, "t", "openlock+unsupported", exact=False)
     side = dict(base, missing_option="openlock+unsupported,side")
     assert not wanted(side, "t", "openlock+unsupported", exact=True)
     assert wanted(side, "t", "openlock+unsupported", exact=False)
-    # no filter at all takes both
     assert wanted(r, "t", None) and wanted(side, "t", None)
     # every exclusion still applies under --exact
     for field, bad in (("texture", "other"), ("has_core", "no"),
@@ -168,10 +164,12 @@ def main():
                          "applying both stacks to 0.04.")
     args = ap.parse_args()
 
+    in_family = lambda r: args.family is None or r["family"].endswith("/" + args.family)
     with open(TSV, newline="") as fh:
-        rows = [r for r in csv.DictReader(fh, delimiter="\t")
-                if wanted(r, args.texture, args.option, args.exact)
-                and (args.family is None or r["family"].endswith("/" + args.family))]
+        queue = list(csv.DictReader(fh, delimiter="\t"))
+    if not any(r["texture"] == args.texture and in_family(r) for r in queue):
+        ap.error(f"no {args.texture} rows in family .../{args.family}")
+    rows = [r for r in queue if wanted(r, args.texture, args.option, args.exact) and in_family(r)]
 
     ok = fail = skip = 0
     for row in rows:
@@ -186,8 +184,7 @@ def main():
             # works for real wall letters.  Corner and s2w pieces end in a size
             # instead (`.2x`, `.2x2`, `.IL+corner,90`), so they land here -- they
             # need Corner.Left/Right out of the BA library and a one-end process
-            # that this script does not implement.  See docs: corners are out of
-            # scope, not merely unbuilt.
+            # that this script does not implement.
             print(f"no library for letter {letter!r} "
                   f"({row['variant']} {row['missing_option']}) -- skipped; "
                   f"corner/s2w pieces need the corner process, not a letter library",
