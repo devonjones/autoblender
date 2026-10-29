@@ -7,6 +7,7 @@ out_path -- always under a texture's updates/ folder, never the production tree.
     bin/apply-gaps.py dungeon_stone              # do the work
     bin/apply-gaps.py dungeon_stone --dry        # print what it would run
     bin/apply-gaps.py dungeon_stone --option unsupported
+    bin/apply-gaps.py rough_stone --family window+square
 
 Skips rows with no node group, no core, a non-empty status, or a
 likely_deliberate flag, plus any row whose output already exists -- so it is
@@ -157,6 +158,7 @@ def main():
                          "it.  'openlock+unsupported' otherwise also picks up "
                          "'openlock+unsupported,side', which is the difference between "
                          "the rows that need no ports and the ones waiting on a sculpt.")
+    ap.add_argument("--family", help="only rows whose family ends with this, e.g. window+square")
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--nudge-z", type=float, default=NUDGE_Z, metavar="MM",
                     help="override the OpenForge cut nudge.  Pass 0 when the cores were "
@@ -168,7 +170,8 @@ def main():
 
     with open(TSV, newline="") as fh:
         rows = [r for r in csv.DictReader(fh, delimiter="\t")
-                if wanted(r, args.texture, args.option, args.exact)]
+                if wanted(r, args.texture, args.option, args.exact)
+                and (args.family is None or r["family"].endswith("/" + args.family))]
 
     ok = fail = skip = 0
     for row in rows:
