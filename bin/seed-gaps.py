@@ -95,7 +95,7 @@ def main():
                     "(rough_stone#wall,window+square ships in window+square/)")
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
-    if a.piece_dir and "/" in a.piece_dir:
+    if a.piece_dir is not None and ("/" in a.piece_dir or a.piece_dir in ("", ".", "..")):
         ap.error("--piece-dir is one folder name, not a path")
 
     with open(og.OUT, newline="") as fh:

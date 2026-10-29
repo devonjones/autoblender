@@ -168,7 +168,7 @@ def main():
     with open(TSV, newline="") as fh:
         queue = list(csv.DictReader(fh, delimiter="\t"))
     if not any(r["texture"] == args.texture and in_family(r) for r in queue):
-        ap.error(f"no {args.texture} rows in family .../{args.family}")
+        ap.error(f"no {args.texture} rows" + (f" in family .../{args.family}" if args.family else ""))
     rows = [r for r in queue if wanted(r, args.texture, args.option, args.exact) and in_family(r)]
 
     ok = fail = skip = 0
