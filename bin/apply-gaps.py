@@ -7,6 +7,7 @@ out_path -- always under a texture's updates/ folder, never the production tree.
     bin/apply-gaps.py dungeon_stone              # do the work
     bin/apply-gaps.py dungeon_stone --dry        # print what it would run
     bin/apply-gaps.py dungeon_stone --option unsupported
+    bin/apply-gaps.py rough_stone --family window+square
 
 Skips rows with no node group, no core, a non-empty status, or a
 likely_deliberate flag, plus any row whose output already exists -- so it is
@@ -55,15 +56,11 @@ def demo():
     base = {"texture": "t", "has_core": "yes", "likely_deliberate": "no",
             "node_group": "OpenLock", "status": "", "missing_option": "openlock+unsupported"}
     r = dict(base)
-    # the distinction --exact exists for: a substring match on
-    # "openlock+unsupported" also catches "openlock+unsupported,side", which is
-    # the difference between a row needing no ports and one waiting on a sculpt
     assert wanted(r, "t", "openlock+unsupported", exact=True)
     assert wanted(r, "t", "openlock+unsupported", exact=False)
     side = dict(base, missing_option="openlock+unsupported,side")
     assert not wanted(side, "t", "openlock+unsupported", exact=True)
     assert wanted(side, "t", "openlock+unsupported", exact=False)
-    # no filter at all takes both
     assert wanted(r, "t", None) and wanted(side, "t", None)
     # every exclusion still applies under --exact
     for field, bad in (("texture", "other"), ("has_core", "no"),
@@ -157,6 +154,7 @@ def main():
                          "it.  'openlock+unsupported' otherwise also picks up "
                          "'openlock+unsupported,side', which is the difference between "
                          "the rows that need no ports and the ones waiting on a sculpt.")
+    ap.add_argument("--family", help="only rows whose family ends with this, e.g. window+square")
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--nudge-z", type=float, default=NUDGE_Z, metavar="MM",
                     help="override the OpenForge cut nudge.  Pass 0 when the cores were "
@@ -166,9 +164,12 @@ def main():
                          "applying both stacks to 0.04.")
     args = ap.parse_args()
 
+    in_family = lambda r: args.family is None or r["family"].endswith("/" + args.family)
     with open(TSV, newline="") as fh:
-        rows = [r for r in csv.DictReader(fh, delimiter="\t")
-                if wanted(r, args.texture, args.option, args.exact)]
+        queue = list(csv.DictReader(fh, delimiter="\t"))
+    if not any(r["texture"] == args.texture and in_family(r) for r in queue):
+        ap.error(f"no {args.texture} rows" + (f" in family .../{args.family}" if args.family else ""))
+    rows = [r for r in queue if wanted(r, args.texture, args.option, args.exact) and in_family(r)]
 
     ok = fail = skip = 0
     for row in rows:
@@ -183,8 +184,7 @@ def main():
             # works for real wall letters.  Corner and s2w pieces end in a size
             # instead (`.2x`, `.2x2`, `.IL+corner,90`), so they land here -- they
             # need Corner.Left/Right out of the BA library and a one-end process
-            # that this script does not implement.  See docs: corners are out of
-            # scope, not merely unbuilt.
+            # that this script does not implement.
             print(f"no library for letter {letter!r} "
                   f"({row['variant']} {row['missing_option']}) -- skipped; "
                   f"corner/s2w pieces need the corner process, not a letter library",
